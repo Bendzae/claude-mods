@@ -7,7 +7,8 @@ import type { Idea } from '../types'
 // something else, kept per project (the session's directory) across sessions
 // in the store. One can be sent to the session on its own, or the session
 // works through them all: it reads them through `ideas_list` and ticks them
-// off through `ideas_update`.
+// off through `ideas_update`. The session can queue ideas too (`ideas_add`),
+// when the person asks it to keep something for later.
 
 const PANE = 'idea-queue'
 const TITLE = 'Ideas'
@@ -15,6 +16,7 @@ const ideas = atom({ plugin: 'idea-queue', key: 'ideas' } as const, [])
 
 const LIST = 'mcp__idea-queue__ideas_list'
 const UPDATE = 'mcp__idea-queue__ideas_update'
+const ADD = 'mcp__idea-queue__ideas_add'
 
 const WORK_PROMPT =
   'Work through the ideas in my idea queue. Decide the order yourself, tell me the order before you start, and tick each one off as you finish it.'
@@ -51,6 +53,10 @@ async function sync($: EngineInterface) {
     await update($, ideas, () => stored)
     showCount($, stored)
   }
+}
+
+function newIdea(text: string): Idea {
+  return { id: crypto.randomUUID().slice(0, 8), text, isStarted: false }
 }
 
 /** How an idea's state shows in the pane: a glyph before it, a line under it. */
@@ -116,6 +122,26 @@ export const register: Register = on => {
       },
       isDeferred: false,
     })
+    await $.tool.register({
+      name: 'ideas_add',
+      description:
+        "Adds ideas to the end of the person's idea queue, for later. Use it when they ask you to queue, park or keep something " +
+        'for later. Write each idea so it stands on its own: what to do and why, enough to act on in a later session ' +
+        'without this conversation. Do not start on them: they wait until the person sends one or asks you to work through the queue.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ideas: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+            description: 'The ideas to add, one entry each, in the order to list them',
+          },
+        },
+        required: ['ideas'],
+      },
+      isDeferred: false,
+    })
     void $.ui.open({ id: PANE, title: TITLE })
 
     return next(e)
@@ -151,6 +177,22 @@ export const register: Register = on => {
     return { result: status === 'done' ? `Done; ${left.length} left in the queue.` : 'Marked as started.' }
   }).catch(() => ({ deny: 'The idea queue could not be changed just now.' }))
 
+  on('tool.call', { tool: ADD }, async ($, e) => {
+    const { ideas: given } = e as unknown as { ideas?: unknown }
+    const texts = Array.isArray(given)
+      ? given.filter((text): text is string => typeof text === 'string').map(text => text.trim()).filter(text => text !== '')
+      : []
+    if (texts.length === 0) {
+      return { deny: 'ideas is a list of at least one idea, each a non-empty string.' }
+    }
+    const added = texts.map(newIdea)
+    const all = await change($, list => [...list, ...added])
+
+    return {
+      result: `Added ${added.map(idea => `[id ${idea.id}] ${idea.text}`).join('; ')}. ${all.length} in the queue.`,
+    }
+  }).catch(() => ({ deny: 'The idea queue could not be changed just now.' }))
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, ideas)
@@ -159,7 +201,7 @@ export const register: Register = on => {
     const add = (text: string) => {
       const trimmed = text.trim()
       if (trimmed !== '') {
-        void change($, all => [...all, { id: crypto.randomUUID().slice(0, 8), text: trimmed, isStarted: false }])
+        void change($, all => [...all, newIdea(trimmed)])
       }
     }
     const remove = (id: string) => void change($, all => all.filter(idea => idea.id !== id))

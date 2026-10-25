@@ -101,6 +101,24 @@ test('one idea sent on its own becomes a prompt of its own', async ($, on) => {
   await ui.unmount()
 })
 
+test('the session can queue ideas for later', async ($, on) => {
+  const seen = engine(on)
+  await start($)
+  const ui = await $.ui.mount({ plugin: 'idea-queue', surface: 'terminal', ...PANE })
+  await ui.input({ key: 'new', text: 'Typed in the pane' })
+
+  const answer = await $.tool.call({ tool: 'mcp__idea-queue__ideas_add', ideas: ['Ley Spike', '  ', 'Afterimage'] })
+  expect(String(answer.result)).toContain('3 in the queue')
+  expect(await ui.find({ text: /Afterimage/ })).toBeDefined()
+  expect(seen.status).toBe('3 ideas queued')
+  expect(await listed($)).toMatch(/Typed in the pane[\s\S]*Ley Spike[\s\S]*Afterimage/)
+  expect(seen.prompts).toHaveLength(0)
+
+  const empty = await $.tool.call({ tool: 'mcp__idea-queue__ideas_add', ideas: [' '] })
+  expect(empty.deny).toContain('at least one idea')
+  await ui.unmount()
+})
+
 test('the session is told when an id is wrong', async ($, on) => {
   engine(on)
   await start($)
