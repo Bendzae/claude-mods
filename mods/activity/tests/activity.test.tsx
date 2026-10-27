@@ -196,3 +196,27 @@ test('the oldest finished commands are left out when the pane is full', async ($
   expect(await ui.find({ text: /older commands hidden/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('long commands and output lines wrap, up to a few lines', async ($, on) => {
+  mock.clock(on)
+  mock.store(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 10 }, rateLimits: [] } as never }))
+  on('agent.list', () => ({ value: [] as never }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  const long = `cargo build --release --target aarch64-apple-darwin --features ${'x,'.repeat(20)}end`
+  const output = `warning: ${'unused '.repeat(12)}import`
+  const huge = 'y'.repeat(400)
+  on('tool.call', () => ({ result: { stdout: `${output}\n${huge}`, stderr: '', interrupted: false } as never, text: '' }))
+  await start($)
+  const ui = await $.ui.mount({ plugin: 'activity', surface: 'terminal', ...PANE })
+  await $.tool.call({ tool: 'Bash', command: long, description: 'Build' } as never)
+
+  expect(long.length).toBeGreaterThan(60)
+  expect(await ui.find({ text: new RegExp(`${long.slice(-20)}$`) })).toBeDefined()
+  expect(await ui.find({ text: /unused import$/ })).toBeDefined()
+  // Past two lines an output line is cut.
+  expect(await ui.find({ text: /^│ y+…$/ })).toBeDefined()
+  await ui.unmount()
+})

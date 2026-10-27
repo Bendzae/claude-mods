@@ -277,6 +277,20 @@ function duration(ms: number): string {
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
 }
 
+/** At most `lines` lines of `cols` columns of `text`, an ellipsis where it's cut. */
+function clip(text: string, cols: number, lines: number): string {
+  const room = Math.max(1, cols) * lines
+  return text.length > room ? `${text.slice(0, room - 1)}…` : text
+}
+
+/** How many lines `text` wraps to in `cols` columns, at most `lines`. */
+function wrappedRows(text: string, cols: number, lines: number): number {
+  return Math.min(lines, Math.max(1, Math.ceil(text.length / Math.max(1, cols))))
+}
+
+const COMMAND_LINES = 3
+const OUTPUT_LINE_LINES = 2
+
 function bar(fraction: number, width: number): string {
   const filled = Math.round(fraction * width)
   return '█'.repeat(filled) + '░'.repeat(width - filled)
@@ -366,7 +380,7 @@ export const register: Register = on => {
         tools: loop.tools + 1,
         current: doing,
         currentStartedAt: startedAt,
-        currentCommand: command === undefined ? undefined : oneLine(command, 200),
+        currentCommand: command === undefined ? undefined : oneLine(command, 400),
       }))
     } catch {
       // Tracking never holds a tool up.
@@ -417,7 +431,7 @@ export const register: Register = on => {
           const shell: ActivityShell = {
             id: String(result.backgroundTaskId),
             title: str(input.description),
-            command: oneLine(str(input.command) ?? 'shell', 200),
+            command: oneLine(str(input.command) ?? 'shell', 400),
             status: 'running',
             // Sent to the background part way through (ctrl+b): timed from the call.
             startedAt: calledAt ?? at,
@@ -431,7 +445,7 @@ export const register: Register = on => {
           const shell: ActivityShell = {
             id: `fg-${String(e.tool_use_id ?? calledAt)}`,
             title: str(input.description),
-            command: oneLine(str(input.command) ?? 'shell', 200),
+            command: oneLine(str(input.command) ?? 'shell', 400),
             status: ran.isError === true || result.interrupted === true ? 'failed' : 'completed',
             startedAt: calledAt ?? at,
             endedAt: at,
@@ -555,8 +569,15 @@ export const register: Register = on => {
     // What fits the pane: the oldest finished shells are left out until the
     // rest fits, each loop saying how many of its own it left out.
     const hidden = new Set<string>()
+    // Columns left for a command or output line under a shell: the pane less
+    // the indents and the `$ ` or `│ ` before it.
+    const textCols = Math.max(10, width - 8)
     const shellRows = (shell: ActivityShell) =>
-      1 + (folded.has(`shell:${shell.id}`) ? 0 : (shell.title !== undefined ? 1 : 0) + shell.tail.length)
+      1 +
+      (folded.has(`shell:${shell.id}`)
+        ? 0
+        : (shell.title !== undefined ? wrappedRows(`$ ${shell.command}`, textCols, COMMAND_LINES) : 0) +
+          shell.tail.reduce((sum, line) => sum + wrappedRows(`│ ${line}`, textCols, OUTPUT_LINE_LINES), 0))
     const loopRows = (loop: ActivityLoop): number => {
       if (folded.has(`loop:${loop.id}`)) {
         return 1
@@ -565,7 +586,9 @@ export const register: Register = on => {
       const children = loops.filter(other => other.id !== MAIN && (other.parentId ?? MAIN) === loop.id)
       return (
         1 +
-        (loop.current !== undefined ? 1 + (loop.currentCommand !== undefined ? 1 : 0) : 0) +
+        (loop.current !== undefined
+          ? 1 + (loop.currentCommand !== undefined ? wrappedRows(`$ ${loop.currentCommand}`, textCols, COMMAND_LINES) : 0)
+          : 0) +
         loop.tasks.length +
         (shown.length < loop.shells.length ? 1 : 0) +
         shown.reduce((sum, shell) => sum + shellRows(shell), 0) +
@@ -645,8 +668,8 @@ export const register: Register = on => {
                 </Box>
                 {loop.currentCommand !== undefined && (
                   <Box paddingLeft={2}>
-                    <Text color="bashBorder" dimColor wrap="truncate-end">
-                      $ {loop.currentCommand}
+                    <Text color="bashBorder" dimColor wrap="wrap">
+                      $ {clip(loop.currentCommand, textCols, COMMAND_LINES)}
                     </Text>
                   </Box>
                 )}
@@ -685,16 +708,16 @@ export const register: Register = on => {
                 )}
                 {!folded.has(`shell:${shell.id}`) && shell.title !== undefined && (
                   <Box paddingLeft={2}>
-                    <Text color="bashBorder" dimColor={shell.status !== 'running'} wrap="truncate-end">
-                      $ {shell.command}
+                    <Text color="bashBorder" dimColor={shell.status !== 'running'} wrap="wrap">
+                      $ {clip(shell.command, textCols, COMMAND_LINES)}
                     </Text>
                   </Box>
                 )}
                 {!folded.has(`shell:${shell.id}`) && shell.tail.length > 0 && (
                   <Box flexDirection="column" paddingLeft={2}>
                     {shell.tail.map((line, i) => (
-                      <Text key={`tail-${shell.id}-${i}`} dimColor wrap="truncate-end">
-                        │ {line}
+                      <Text key={`tail-${shell.id}-${i}`} dimColor wrap="wrap">
+                        │ {clip(line, textCols, OUTPUT_LINE_LINES)}
                       </Text>
                     ))}
                   </Box>
