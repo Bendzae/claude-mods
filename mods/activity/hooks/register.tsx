@@ -189,6 +189,8 @@ async function syncAgents($: EngineInterface) {
         parentId: agent.parentId ?? MAIN,
         endedAt: ENDED.has(status) ? (before?.endedAt ?? at) : undefined,
         current: ENDED.has(status) ? undefined : before?.current,
+        currentStartedAt: ENDED.has(status) ? undefined : before?.currentStartedAt,
+        currentCommand: ENDED.has(status) ? undefined : before?.currentCommand,
       }
     }
     return { ...b, loops }
@@ -311,7 +313,13 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       try {
-        await changeLoop($, MAIN, loop => ({ ...loop, status: 'idle', current: undefined }))
+        await changeLoop($, MAIN, loop => ({
+          ...loop,
+          status: 'idle',
+          current: undefined,
+          currentStartedAt: undefined,
+          currentCommand: undefined,
+        }))
       } catch {
         // As above.
       }
@@ -323,8 +331,18 @@ export const register: Register = on => {
     const loopId = e.agentId ?? MAIN
     const input = e as unknown as Loose
     const doing = describeCall(String(e.tool), input)
+    const command = str(input.description) !== undefined ? str(input.command) : undefined
+    let calledAt: number | undefined
     try {
-      await changeLoop($, loopId, loop => ({ ...loop, tools: loop.tools + 1, current: doing }))
+      calledAt = await $.clock.now()
+      const startedAt = calledAt
+      await changeLoop($, loopId, loop => ({
+        ...loop,
+        tools: loop.tools + 1,
+        current: doing,
+        currentStartedAt: startedAt,
+        currentCommand: command === undefined ? undefined : oneLine(command, 200),
+      }))
     } catch {
       // Tracking never holds a tool up.
     }
@@ -376,7 +394,8 @@ export const register: Register = on => {
             title: str(input.description),
             command: oneLine(str(input.command) ?? 'shell', 200),
             status: 'running',
-            startedAt: at,
+            // Sent to the background part way through (ctrl+b): timed from the call.
+            startedAt: calledAt ?? at,
             outputPath,
             tail: [],
           }
@@ -385,7 +404,15 @@ export const register: Register = on => {
           const id = str(input.task_id) ?? str(input.shell_id)
           shells = shells.map(s => (s.id === id && s.status === 'running' ? { ...s, status: 'killed', endedAt: at } : s))
         }
-        return { ...loop, tasks, shells, current: loop.current === doing ? undefined : loop.current }
+        const isDone = loop.current === doing
+        return {
+          ...loop,
+          tasks,
+          shells,
+          current: isDone ? undefined : loop.current,
+          currentStartedAt: isDone ? undefined : loop.currentStartedAt,
+          currentCommand: isDone ? undefined : loop.currentCommand,
+        }
       })
     } catch {
       // As above.
@@ -518,9 +545,23 @@ export const register: Register = on => {
           {!folded.has(`loop:${loop.id}`) && (
           <Box flexDirection="column" paddingLeft={2}>
             {loop.current !== undefined && (
-              <Text color="suggestion" italic wrap="truncate-end">
-                ↳ {loop.current}
-              </Text>
+              <Box flexDirection="column">
+                <Box flexDirection="row" gap={1}>
+                  <Box flexGrow={1} flexShrink={1}>
+                    <Text color="suggestion" italic wrap="truncate-end">
+                      ↳ {loop.current}
+                    </Text>
+                  </Box>
+                  <Text dimColor>{since(loop.currentStartedAt)}</Text>
+                </Box>
+                {loop.currentCommand !== undefined && (
+                  <Box paddingLeft={2}>
+                    <Text color="bashBorder" dimColor wrap="truncate-end">
+                      $ {loop.currentCommand}
+                    </Text>
+                  </Box>
+                )}
+              </Box>
             )}
             {loop.tasks.map(task =>
               row(

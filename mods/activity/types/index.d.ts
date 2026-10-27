@@ -34,7 +34,12 @@ export type ActivityLoop = {
   /** When the main loop's current turn started. */
   turnStartedAt?: number
   tools: number
+  /** The tool call under way, in a few words. */
   current?: string
+  /** When it started. */
+  currentStartedAt?: number
+  /** A shell command under way, when the words above are its description. */
+  currentCommand?: string
   tasks: ActivityTask[]
   shells: ActivityShell[]
 }

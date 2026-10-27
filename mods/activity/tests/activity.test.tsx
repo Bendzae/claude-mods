@@ -120,3 +120,33 @@ test('agents and shells fold away when clicked', async ($, on) => {
   expect(await ui.find({ text: /Explore the repo/ })).toBeUndefined()
   await ui.unmount()
 })
+
+test('a foreground command shows its command and how long it has run', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 10 }, rateLimits: [] } as never }))
+  on('agent.list', () => ({ value: [] as never }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  let finish = () => {}
+  on('tool.call', async () => {
+    await new Promise<void>(resolve => {
+      finish = resolve
+    })
+    return { result: { stdout: 'ok', stderr: '', interrupted: false } as never, text: 'ok' }
+  })
+  await start($)
+  const ui = await $.ui.mount({ plugin: 'activity', surface: 'terminal', ...PANE })
+
+  const call = $.tool.call({ tool: 'Bash', command: 'cargo build --release', description: 'Build the game' } as never)
+  await clock.advance(65000)
+  expect(await ui.find({ text: /↳ Bash: Build the game/ })).toBeDefined()
+  expect(await ui.find({ text: /\$ cargo build --release/ })).toBeDefined()
+  expect(await ui.find({ text: /^1m 05s$/ })).toBeDefined()
+
+  finish()
+  await call
+  expect(await ui.find({ text: /↳ Bash/ })).toBeUndefined()
+  await ui.unmount()
+})
