@@ -130,11 +130,14 @@ test('a foreground command shows its command and how long it has run', async ($,
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   let finish = () => {}
-  on('tool.call', async () => {
+  on('tool.call', async (_$, e) => {
+    if ((e as unknown as { command?: string }).command === 'ls') {
+      return { result: { stdout: 'a b', stderr: '', interrupted: false } as never, text: 'a b' }
+    }
     await new Promise<void>(resolve => {
       finish = resolve
     })
-    return { result: { stdout: 'ok', stderr: '', interrupted: false } as never, text: 'ok' }
+    return { result: { stdout: 'Compiling game\nFinished release', stderr: '', interrupted: false } as never, text: 'ok' }
   })
   await start($)
   const ui = await $.ui.mount({ plugin: 'activity', surface: 'terminal', ...PANE })
@@ -148,5 +151,13 @@ test('a foreground command shows its command and how long it has run', async ($,
   finish()
   await call
   expect(await ui.find({ text: /↳ Bash/ })).toBeUndefined()
+  // Kept once done, having run a while: its command, time and last lines.
+  expect(await ui.find({ text: /^Build the game$/ })).toBeDefined()
+  expect(await ui.find({ text: /\$ cargo build --release/ })).toBeDefined()
+  expect(await ui.find({ text: /Finished release/ })).toBeDefined()
+
+  // A quick one isn't kept.
+  await $.tool.call({ tool: 'Bash', command: 'ls', description: 'List files' } as never)
+  expect(await ui.find({ text: /List files/ })).toBeUndefined()
   await ui.unmount()
 })

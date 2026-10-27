@@ -12,6 +12,8 @@ import type { ActivityBoard, ActivityLoop, ActivityShell, ActivityTask } from '.
 const PANE = 'activity'
 const MAIN = 'main'
 const TAIL_LINES = 4
+/** A foreground command that ran at least this long is kept once it's done. */
+const KEEP_FOREGROUND_MS = 3000
 /** Output files bigger than this aren't read for their tail. */
 const TAIL_MAX_BYTES = 2 * 1024 * 1024
 
@@ -88,6 +90,16 @@ function textOf(content: unknown): string {
     return ''
   }
   return content.map((block: Loose) => (typeof block.text === 'string' ? block.text : '')).join('\n')
+}
+
+/** The last non-empty lines of some output, without colour codes. */
+function lastLines(text: string): string[] {
+  return text
+    .replace(ANSI, '')
+    .split(/\r?\n|\r/)
+    .map(line => line.trimEnd())
+    .filter(line => line !== '')
+    .slice(-TAIL_LINES)
 }
 
 // eslint-disable-next-line no-control-regex
@@ -400,6 +412,25 @@ export const register: Register = on => {
             tail: [],
           }
           shells = [...shells.filter(s => s.id !== shell.id), shell]
+        } else if (
+          tool === 'Bash' &&
+          calledAt !== undefined &&
+          at - calledAt >= KEEP_FOREGROUND_MS &&
+          str(input.command) !== undefined
+        ) {
+          // A foreground command that took a while: kept as a finished shell.
+          const output = [str(result.stdout), str(result.stderr)].filter(part => part !== undefined).join('\n')
+          const shell: ActivityShell = {
+            id: `fg-${String(e.tool_use_id ?? calledAt)}`,
+            title: str(input.description),
+            command: oneLine(str(input.command) ?? 'shell', 200),
+            status: ran.isError === true || result.interrupted === true ? 'failed' : 'completed',
+            startedAt: calledAt,
+            endedAt: at,
+            tail: lastLines(output !== '' ? output : (ran.text ?? '')),
+            isTailFinal: true,
+          }
+          shells = [...shells, shell]
         } else if (tool === 'TaskStop' || tool === 'KillShell') {
           const id = str(input.task_id) ?? str(input.shell_id)
           shells = shells.map(s => (s.id === id && s.status === 'running' ? { ...s, status: 'killed', endedAt: at } : s))
