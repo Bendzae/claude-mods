@@ -9,6 +9,11 @@
       "name": "idea-queue",
       "source": "./mods/idea-queue",
       "description": "A side panel to queue ideas for later while a session works; send one on its own, or let the session work through them all"
+    },
+    {
+      "name": "activity",
+      "source": "./mods/activity",
+      "description": "A side panel of what the session is doing: tasks, background shells with their latest output, subagents nested with their own, running times and overall progress"
     }
   ]
 }

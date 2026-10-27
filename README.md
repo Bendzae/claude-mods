@@ -12,6 +12,14 @@ folder under `mods/` and an entry in `.claude-plugin/marketplace.json`.
   session can also add ideas when asked to keep something for later. Kept
   per project across sessions; `/ideas` reopens the panel.
 
+- **activity**: a side panel of what the session is doing. The main session
+  and each subagent (nested under whoever started it) with its status, tool
+  count, running time and current tool call; its task list with times; its
+  background shells with the command and their last output lines. Overall
+  progress across tasks, shells and subagents, the turn's time and context
+  fill on top. Click an agent or a shell to fold it; `clear finished` tidies
+  up; `/activity` reopens the panel.
+
 ## Installing
 
 On this machine the marketplace is this folder, so sessions read the mods from
@@ -20,6 +28,7 @@ here directly. After editing one, run `/reload-plugins` in a session.
 ```
 claude plugin marketplace add ~/code/claude-mods
 claude plugin install idea-queue@claude-mods --scope user
+claude plugin install activity@claude-mods --scope user
 ```
 
 On another machine, from GitHub (the repository is private, so `gh` or git
@@ -27,6 +36,7 @@ needs access to it):
 
 ```
 /plugin install idea-queue --marketplace Bendzae/claude-mods
+/plugin install activity --marketplace Bendzae/claude-mods
 ```
 
 ## Developing a mod
