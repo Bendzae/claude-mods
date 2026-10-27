@@ -51,6 +51,6 @@ export type ActivityBoard = {
 
 declare module 'claude-code' {
   interface PluginState {
-    activity: { board: ActivityBoard; now: number; collapsed: string[] }
+    activity: { board: ActivityBoard; now: number; flipped: string[] }
   }
 }

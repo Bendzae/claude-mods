@@ -156,8 +156,43 @@ test('a foreground command shows its command and how long it has run', async ($,
   expect(await ui.find({ text: /\$ cargo build --release/ })).toBeDefined()
   expect(await ui.find({ text: /Finished release/ })).toBeDefined()
 
-  // A quick one isn't kept.
+  // The next one is kept too, open; the one before folds away.
   await $.tool.call({ tool: 'Bash', command: 'ls', description: 'List files' } as never)
-  expect(await ui.find({ text: /List files/ })).toBeUndefined()
+  expect(await ui.find({ text: /^List files$/ })).toBeDefined()
+  expect(await ui.find({ text: /a b/ })).toBeDefined()
+  expect(await ui.find({ text: /^Build the game$/ })).toBeDefined()
+  expect(await ui.find({ text: /Finished release/ })).toBeUndefined()
+
+  // Clicked open, it stays open.
+  const fold = await ui.find({ type: 'Button', text: /Build the game/ })
+  expect(fold?.key).toMatch(/^toggle-shell:fg-/)
+  await ui.press({ key: fold?.key ?? '' })
+  expect(await ui.find({ text: /Finished release/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the oldest finished commands are left out when the pane is full', async ($, on) => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 10 }, rateLimits: [] } as never }))
+  on('agent.list', () => ({ value: [] as never }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('tool.call', (_$, e) => {
+    const command = (e as unknown as { command?: string }).command ?? ''
+    return { result: { stdout: `out of ${command}`, stderr: '', interrupted: false } as never, text: '' }
+  })
+  await start($)
+  const small = { ...PANE, props: { ...PANE.props, scroll: { offset: 0, bodyRows: 12 } } }
+  const ui = await $.ui.mount({ plugin: 'activity', surface: 'terminal', ...small })
+  for (let i = 1; i <= 10; i += 1) {
+    await $.tool.call({ tool: 'Bash', command: `step ${i}`, description: `Step ${i}` } as never)
+    await clock.advance(1000)
+  }
+  expect(await ui.find({ text: /^Step 10$/ })).toBeDefined()
+  expect(await ui.find({ text: /out of step 10/ })).toBeDefined()
+  expect(await ui.find({ text: /^Step 1$/ })).toBeUndefined()
+  expect(await ui.find({ text: /older commands hidden/ })).toBeDefined()
   await ui.unmount()
 })

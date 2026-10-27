@@ -12,15 +12,28 @@ import type { ActivityBoard, ActivityLoop, ActivityShell, ActivityTask } from '.
 const PANE = 'activity'
 const MAIN = 'main'
 const TAIL_LINES = 4
-/** A foreground command that ran at least this long is kept once it's done. */
-const KEEP_FOREGROUND_MS = 3000
+/** Finished shells kept per loop; past that the oldest go. */
+const KEEP_FINISHED_SHELLS = 50
 /** Output files bigger than this aren't read for their tail. */
 const TAIL_MAX_BYTES = 2 * 1024 * 1024
 
 const board = atom({ plugin: 'activity', key: 'board' } as const, { loops: {} })
 const now = atom({ plugin: 'activity', key: 'now' } as const, 0)
-/** What the person folded away: `loop:<id>` and `shell:<id>`. */
-const collapsed = atom({ plugin: 'activity', key: 'collapsed' } as const, [])
+/** Rows the person clicked open or shut against how they'd be by default:
+ * `loop:<id>` and `shell:<id>`. */
+const flipped = atom({ plugin: 'activity', key: 'flipped' } as const, [])
+
+/** Appends a shell, dropping the oldest finished ones past the cap. */
+function withShell(shells: ActivityShell[], shell: ActivityShell): ActivityShell[] {
+  const all = [...shells.filter(s => s.id !== shell.id), shell]
+  const finished = all.filter(s => s.status !== 'running')
+  const extra = finished.length - KEEP_FINISHED_SHELLS
+  if (extra <= 0) {
+    return all
+  }
+  const dropped = new Set(finished.slice(0, extra).map(s => s.id))
+  return all.filter(s => !dropped.has(s.id))
+}
 
 type Loose = Record<string, unknown>
 
@@ -411,26 +424,21 @@ export const register: Register = on => {
             outputPath,
             tail: [],
           }
-          shells = [...shells.filter(s => s.id !== shell.id), shell]
-        } else if (
-          tool === 'Bash' &&
-          calledAt !== undefined &&
-          at - calledAt >= KEEP_FOREGROUND_MS &&
-          str(input.command) !== undefined
-        ) {
-          // A foreground command that took a while: kept as a finished shell.
+          shells = withShell(shells, shell)
+        } else if (tool === 'Bash' && str(input.command) !== undefined) {
+          // A foreground command: kept as a finished shell.
           const output = [str(result.stdout), str(result.stderr)].filter(part => part !== undefined).join('\n')
           const shell: ActivityShell = {
             id: `fg-${String(e.tool_use_id ?? calledAt)}`,
             title: str(input.description),
             command: oneLine(str(input.command) ?? 'shell', 200),
             status: ran.isError === true || result.interrupted === true ? 'failed' : 'completed',
-            startedAt: calledAt,
+            startedAt: calledAt ?? at,
             endedAt: at,
             tail: lastLines(output !== '' ? output : (ran.text ?? '')),
             isTailFinal: true,
           }
-          shells = [...shells, shell]
+          shells = withShell(shells, shell)
         } else if (tool === 'TaskStop' || tool === 'KillShell') {
           const id = str(input.task_id) ?? str(input.shell_id)
           shells = shells.map(s => (s.id === id && s.status === 'running' ? { ...s, status: 'killed', endedAt: at } : s))
@@ -523,9 +531,59 @@ export const register: Register = on => {
       </Box>
     )
 
-    const folded = new Set(await read($, collapsed))
+    const flips = new Set(await read($, flipped))
     const toggle = (id: string) =>
-      void update($, collapsed, list => (list.includes(id) ? list.filter(one => one !== id) : [...list, id]))
+      void update($, flipped, list => (list.includes(id) ? list.filter(one => one !== id) : [...list, id]))
+
+    // Open by default: every loop; a shell while it runs, and the last one
+    // until the next command starts. A click flips that.
+    const shellOpenByDefault = (loop: ActivityLoop, shell: ActivityShell) =>
+      shell.status === 'running' || (shell.id === loop.shells.at(-1)?.id && loop.current === undefined)
+    const folded = {
+      has: (id: string) => {
+        let byDefault = false
+        if (id.startsWith('shell:')) {
+          const shellId = id.slice('shell:'.length)
+          const loop = loops.find(l => l.shells.some(s => s.id === shellId))
+          const shell = loop?.shells.find(s => s.id === shellId)
+          byDefault = loop === undefined || shell === undefined || !shellOpenByDefault(loop, shell)
+        }
+        return byDefault !== flips.has(id)
+      },
+    }
+
+    // What fits the pane: the oldest finished shells are left out until the
+    // rest fits, each loop saying how many of its own it left out.
+    const hidden = new Set<string>()
+    const shellRows = (shell: ActivityShell) =>
+      1 + (folded.has(`shell:${shell.id}`) ? 0 : (shell.title !== undefined ? 1 : 0) + shell.tail.length)
+    const loopRows = (loop: ActivityLoop): number => {
+      if (folded.has(`loop:${loop.id}`)) {
+        return 1
+      }
+      const shown = loop.shells.filter(s => !hidden.has(s.id))
+      const children = loops.filter(other => other.id !== MAIN && (other.parentId ?? MAIN) === loop.id)
+      return (
+        1 +
+        (loop.current !== undefined ? 1 + (loop.currentCommand !== undefined ? 1 : 0) : 0) +
+        loop.tasks.length +
+        (shown.length < loop.shells.length ? 1 : 0) +
+        shown.reduce((sum, shell) => sum + shellRows(shell), 0) +
+        children.reduce((sum, child) => sum + loopRows(child), 0)
+      )
+    }
+    const room = e.props.scroll.bodyRows
+    const chrome = 1 + (total > 0 ? 1 : 0) + 1 + (hasFinished ? 2 : 0)
+    const oldestFirst = loops
+      .flatMap(loop => loop.shells)
+      .filter(shell => shell.status !== 'running')
+      .sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
+    for (const shell of oldestFirst) {
+      if (main === undefined || chrome + loopRows(main) <= room) {
+        break
+      }
+      hidden.add(shell.id)
+    }
 
     /** A row that folds what's under it away when clicked. */
     const header = (id: string, glyph: string, color: string, label: string, right: string, dim = false, bold = false) => (
@@ -604,7 +662,12 @@ export const register: Register = on => {
                 task.status === 'completed',
               ),
             )}
-            {loop.shells.map(shell => (
+            {loop.shells.some(shell => hidden.has(shell.id)) && (
+              <Text dimColor italic>
+                … {loop.shells.filter(shell => hidden.has(shell.id)).length} older commands hidden
+              </Text>
+            )}
+            {loop.shells.filter(shell => !hidden.has(shell.id)).map(shell => (
               <Box key={`shell-${loop.id}-${shell.id}`} flexDirection="column">
                 {header(
                   `shell:${shell.id}`,
