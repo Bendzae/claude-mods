@@ -136,3 +136,22 @@ test('ideas stay with their project across sessions', async ($, on) => {
   await start($)
   expect(await listed($)).toContain('Kept for later')
 })
+
+test('an idea can be edited in the pane', async ($, on) => {
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount({ plugin: 'idea-queue', surface: 'terminal', ...PANE })
+  await ui.input({ key: 'new', text: 'Embed the fonts' })
+  const id = /\[id (\w+)\]/.exec(await listed($))?.[1] ?? ''
+
+  await ui.press({ key: `edit-btn-${id}` })
+  await ui.input({ key: `edit-${id}`, text: 'Embed the fonts and sounds' })
+  expect(await listed($)).toMatch(/\] Embed the fonts and sounds$/)
+  expect(await ui.find({ key: `edit-${id}` })).toBeUndefined()
+
+  // Left empty, it stays as it was.
+  await ui.press({ key: `edit-btn-${id}` })
+  await ui.input({ key: `edit-${id}`, text: '  ' })
+  expect(await listed($)).toMatch(/\] Embed the fonts and sounds$/)
+  await ui.unmount()
+})

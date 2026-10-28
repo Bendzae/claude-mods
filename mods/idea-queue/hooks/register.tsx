@@ -13,6 +13,7 @@ import type { Idea } from '../types'
 const PANE = 'idea-queue'
 const TITLE = 'Ideas'
 const ideas = atom({ plugin: 'idea-queue', key: 'ideas' } as const, [])
+const editing = atom({ plugin: 'idea-queue', key: 'editing' } as const, '')
 
 const LIST = 'mcp__idea-queue__ideas_list'
 const UPDATE = 'mcp__idea-queue__ideas_update'
@@ -196,6 +197,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, ideas)
+    const editingId = await read($, editing)
     const waiting = list.filter(idea => !idea.isSent && !idea.isStarted)
 
     const add = (text: string) => {
@@ -209,6 +211,19 @@ export const register: Register = on => {
       void $.prompt.submit({ text: sendPrompt(idea), asUser: true })
       void change($, all => all.map(one => (one.id === idea.id ? { ...one, isSent: true } : one)))
       $.ui.toast('Sent: it runs as soon as the session is free.')
+    }
+    const edit = (id: string) => {
+      void update($, editing, () => id)
+      // The keyboard to the field, where the surface has one to move.
+      void $.ui.focus({ requestId: PANE, key: `edit-${id}` }).catch(() => undefined)
+    }
+    const stopEditing = () => void update($, editing, () => '')
+    const save = (id: string, text: string) => {
+      const trimmed = text.trim()
+      if (trimmed !== '') {
+        void change($, all => all.map(one => (one.id === id ? { ...one, text: trimmed } : one)))
+      }
+      stopEditing()
     }
     const workThrough = () => {
       void $.prompt.submit({ text: WORK_PROMPT, asUser: true })
@@ -247,6 +262,25 @@ export const register: Register = on => {
           <Box flexDirection="column">
             {list.map((idea, i) => {
               const state = mark(idea)
+              const canEdit = !idea.isSent && !idea.isStarted
+              if (canEdit && idea.id === editingId && e.surface !== 'mobile') {
+                const { Input } = $.ui.resolve(e)
+                return (
+                  <Box key={`idea-${idea.id}`} flexDirection="row" gap={1} paddingX={1}>
+                    <Text color="claude">✎</Text>
+                    <Box flexGrow={1} flexShrink={1} borderStyle="round" borderColor="claude" paddingX={1}>
+                      <Input
+                        key={`edit-${idea.id}`}
+                        value={idea.text}
+                        submitLabel="save"
+                        autoFocus
+                        onSubmit={text => save(idea.id, text)}
+                      />
+                    </Box>
+                    <Button key={`cancel-${idea.id}`} plain label="cancel" onPress={stopEditing} />
+                  </Box>
+                )
+              }
               return (
                 <Box
                   key={`idea-${idea.id}`}
@@ -267,9 +301,8 @@ export const register: Register = on => {
                       </Text>
                     )}
                   </Box>
-                  {!idea.isSent && !idea.isStarted && (
-                    <Button key={`send-${idea.id}`} plain label="send ↗" onPress={() => send(idea)} />
-                  )}
+                  {canEdit && <Button key={`edit-btn-${idea.id}`} plain label="✎" onPress={() => edit(idea.id)} />}
+                  {canEdit && <Button key={`send-${idea.id}`} plain label="send ↗" onPress={() => send(idea)} />}
                   <Button key={`remove-${idea.id}`} plain label="×" onPress={() => remove(idea.id)} />
                 </Box>
               )

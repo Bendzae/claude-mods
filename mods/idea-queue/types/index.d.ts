@@ -7,6 +7,7 @@ export type Idea = { id: string; text: string; isSent?: boolean; isStarted: bool
 
 declare module 'claude-code' {
   interface PluginState {
-    'idea-queue': { ideas: Idea[] }
+    /** `editing`: the id of the idea being edited in the pane, or ''. */
+    'idea-queue': { ideas: Idea[]; editing: string }
   }
 }

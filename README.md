@@ -8,7 +8,8 @@ folder under `mods/` and an entry in `.claude-plugin/marketplace.json`.
 - **idea-queue**: a side panel for ideas you want done later, while a session
   is busy with something else. Type an idea and press Enter. Send one to the
   session on its own (`send ↗`), or let the session work through them all
-  (`Work through all`), choosing the order itself and ticking each off. A
+  (`Work through all`), choosing the order itself and ticking each off. Edit
+  an idea with `✎` (Enter saves). A
   session can also add ideas when asked to keep something for later. Kept
   per project across sessions; `/ideas` reopens the panel.
 

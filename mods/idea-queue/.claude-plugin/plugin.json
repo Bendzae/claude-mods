@@ -1,6 +1,6 @@
 {
   "name": "idea-queue",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A side panel to queue ideas for later while a session works; the session reads the queue and works through it when asked",
   "author": {
     "name": "Ben"
