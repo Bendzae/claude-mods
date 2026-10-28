@@ -16,6 +16,8 @@ const TAIL_LINES = 4
 const KEEP_FINISHED_SHELLS = 50
 /** Output files bigger than this aren't read for their tail. */
 const TAIL_MAX_BYTES = 2 * 1024 * 1024
+/** The most of an output file a copy reads: one read's limit. */
+const COPY_MAX_BYTES = 4 * 1024 * 1024
 
 const board = atom({ plugin: 'activity', key: 'board' } as const, { loops: {} })
 const now = atom({ plugin: 'activity', key: 'now' } as const, 0)
@@ -164,6 +166,36 @@ async function readTails($: EngineInterface) {
   }
 }
 
+/** Foreground commands' whole output, for copying, the newest kept (the board keeps only their last lines). */
+const fullOutputs = new Map<string, string>()
+/** Commands as given, for copying, by shell (the board keeps them on one line, cut short). */
+const fullCommands = new Map<string, string>()
+
+function keep(map: Map<string, string>, id: string, text: string) {
+  map.delete(id)
+  map.set(id, text)
+  while (map.size > KEEP_FINISHED_SHELLS * 2) {
+    const oldest = map.keys().next().value
+    if (oldest === undefined) break
+    map.delete(oldest)
+  }
+}
+
+/** A command's whole output, without colour codes: its file's, else what's kept of it. */
+async function fullOutput($: EngineInterface, shell: ActivityShell): Promise<string | undefined> {
+  if (shell.outputPath !== undefined) {
+    try {
+      const { size } = await $.fs.stat(shell.outputPath)
+      if (size <= COPY_MAX_BYTES) {
+        return (await $.fs.read(shell.outputPath)).replace(ANSI, '')
+      }
+    } catch {
+      // Gone already: fall back to what's kept.
+    }
+  }
+  return (fullOutputs.get(shell.id) ?? shell.tail.join('\n')).replace(ANSI, '')
+}
+
 /** The output file a background command's result names; the sentence's full stop isn't part of it. */
 function outputPathIn(text: string): string | undefined {
   return /Output is being written to: (\S+?)\.?(?:\s|$)/.exec(text)?.[1]
@@ -289,11 +321,20 @@ function wrappedRows(text: string, cols: number, lines: number): number {
 }
 
 const COMMAND_LINES = 3
+/** Commands' colour: plain, so a red-pink shell colour doesn't read as a failure. */
+const COMMAND_COLOR = 'text'
+/** Output lines' colour, apart from the commands'. Never dimmed: dimming draws
+ * text in the theme's grey instead of its colour. */
+const OUTPUT_COLOR = 'ide'
+/** The copy buttons on an open command's row: its command, its output. */
+const COPY_COMMAND_ICON = '❯'
+const COPY_OUTPUT_ICON = '☰'
 const OUTPUT_LINE_LINES = 2
 
-function bar(fraction: number, width: number): string {
+/** A progress bar's filled and empty parts. */
+function bar(fraction: number, width: number): [string, string] {
   const filled = Math.round(fraction * width)
-  return '█'.repeat(filled) + '░'.repeat(width - filled)
+  return ['━'.repeat(filled), '━'.repeat(width - filled)]
 }
 
 const SPIN = ['◐', '◓', '◑', '◒']
@@ -438,6 +479,7 @@ export const register: Register = on => {
             outputPath,
             tail: [],
           }
+          keep(fullCommands, shell.id, str(input.command) ?? shell.command)
           shells = withShell(shells, shell)
         } else if (tool === 'Bash' && str(input.command) !== undefined) {
           // A foreground command: kept as a finished shell.
@@ -452,6 +494,8 @@ export const register: Register = on => {
             tail: lastLines(output !== '' ? output : (ran.text ?? '')),
             isTailFinal: true,
           }
+          keep(fullCommands, shell.id, str(input.command) ?? shell.command)
+          keep(fullOutputs, shell.id, output !== '' ? output : (ran.text ?? ''))
           shells = withShell(shells, shell)
         } else if (tool === 'TaskStop' || tool === 'KillShell') {
           const id = str(input.task_id) ?? str(input.shell_id)
@@ -537,7 +581,7 @@ export const register: Register = on => {
       <Box key={key} flexDirection="row" gap={1}>
         <Text color={color}>{glyph}</Text>
         <Box flexGrow={1} flexShrink={1}>
-          <Text dimColor={dim} wrap="truncate-end">
+          <Text dimColor={dim} strikethrough={dim} wrap="truncate-end">
             {label}
           </Text>
         </Box>
@@ -576,7 +620,7 @@ export const register: Register = on => {
       1 +
       (folded.has(`shell:${shell.id}`)
         ? 0
-        : (shell.title !== undefined ? wrappedRows(`$ ${shell.command}`, textCols, COMMAND_LINES) : 0) +
+        : wrappedRows(`$ ${shell.command}`, textCols, COMMAND_LINES) +
           shell.tail.reduce((sum, line) => sum + wrappedRows(`│ ${line}`, textCols, OUTPUT_LINE_LINES), 0))
     const loopRows = (loop: ActivityLoop): number => {
       if (folded.has(`loop:${loop.id}`)) {
@@ -596,7 +640,7 @@ export const register: Register = on => {
       )
     }
     const room = e.props.scroll.bodyRows
-    const chrome = 1 + (total > 0 ? 1 : 0) + 1 + (hasFinished ? 2 : 0)
+    const chrome = 2 + (total > 0 ? 1 : 0) + 1 + (hasFinished ? 2 : 0)
     const oldestFirst = loops
       .flatMap(loop => loop.shells)
       .filter(shell => shell.status !== 'running')
@@ -608,8 +652,28 @@ export const register: Register = on => {
       hidden.add(shell.id)
     }
 
+    const command = (key: string, text: string, dim: boolean) => (
+      <Box key={key} paddingLeft={2}>
+        <Text wrap="wrap">
+          <Text color="subtle">$ </Text>
+          <Text color={COMMAND_COLOR} italic={dim}>
+            {clip(text, textCols, COMMAND_LINES)}
+          </Text>
+        </Text>
+      </Box>
+    )
+
     /** A row that folds what's under it away when clicked. */
-    const header = (id: string, glyph: string, color: string, label: string, right: string, dim = false, bold = false) => (
+    const header = (
+      id: string,
+      glyph: string,
+      color: string,
+      label: string,
+      right: string,
+      dim = false,
+      bold = false,
+      extra?: RenderChildren,
+    ) => (
       <Box key={`head-${id}`} flexDirection="row" gap={1}>
         <Box flexGrow={1} flexShrink={1}>
           <Button key={`toggle-${id}`} plain onPress={() => toggle(id)}>
@@ -620,9 +684,44 @@ export const register: Register = on => {
             </Text>
           </Button>
         </Box>
+        {extra}
         <Text dimColor>{right}</Text>
       </Box>
     )
+
+    const copyCommand = (text: string, surface: Parameters<typeof $.ui.copy>[0]['surface']) =>
+      void (async () => {
+        const copied = await $.ui.copy({ text, surface })
+        $.ui.toast(copied.isCopied ? 'Copied the command' : 'Couldn\'t copy the command')
+      })()
+    const copy = (shell: ActivityShell, surface: Parameters<typeof $.ui.copy>[0]['surface']) =>
+      void (async () => {
+        const text = (await fullOutput($, shell))?.trimEnd() ?? ''
+        if (text === '') {
+          $.ui.toast('No output to copy')
+          return
+        }
+        const copied = await $.ui.copy({ text, surface })
+        const lines = text.split('\n').length
+        $.ui.toast(copied.isCopied ? `Copied ${lines} line${lines === 1 ? '' : 's'} of output` : 'Couldn\'t copy the output')
+      })()
+    /** An open shell's copy buttons, side by side: its command, then its output. */
+    const copyButtons = (shell: ActivityShell) => [
+      <Button
+        key={`copy-cmd-${shell.id}`}
+        plain
+        onPress={press => copyCommand(fullCommands.get(shell.id) ?? shell.command, press.surface)}
+      >
+        <Text color="subtle">{COPY_COMMAND_ICON}</Text>
+      </Button>,
+      ...(shell.tail.length > 0 || shell.outputPath !== undefined
+        ? [
+            <Button key={`copy-${shell.id}`} plain onPress={press => copy(shell, press.surface)}>
+              <Text color={OUTPUT_COLOR}>{COPY_OUTPUT_ICON}</Text>
+            </Button>,
+          ]
+        : []),
+    ]
 
     const loopGlyph = (loop: ActivityLoop): [string, string] => {
       if (loop.status === 'running' || loop.status === 'pending') return [spin, 'claude']
@@ -666,13 +765,7 @@ export const register: Register = on => {
                   </Box>
                   <Text dimColor>{since(loop.currentStartedAt)}</Text>
                 </Box>
-                {loop.currentCommand !== undefined && (
-                  <Box paddingLeft={2}>
-                    <Text color="bashBorder" dimColor wrap="wrap">
-                      $ {clip(loop.currentCommand, textCols, COMMAND_LINES)}
-                    </Text>
-                  </Box>
-                )}
+                {loop.currentCommand !== undefined && command(`now-${loop.id}`, loop.currentCommand, false)}
               </Box>
             )}
             {loop.tasks.map(task =>
@@ -686,8 +779,8 @@ export const register: Register = on => {
               ),
             )}
             {loop.shells.some(shell => hidden.has(shell.id)) && (
-              <Text dimColor italic>
-                … {loop.shells.filter(shell => hidden.has(shell.id)).length} older commands hidden
+              <Text color="subtle" italic>
+                ⋯ {loop.shells.filter(shell => hidden.has(shell.id)).length} older commands hidden
               </Text>
             )}
             {loop.shells.filter(shell => !hidden.has(shell.id)).map(shell => (
@@ -696,28 +789,28 @@ export const register: Register = on => {
                   `shell:${shell.id}`,
                   shell.status === 'running' ? spin : shell.status === 'completed' ? '✓' : shell.status === 'killed' ? '■' : '✗',
                   shell.status === 'running'
-                    ? 'bashBorder'
+                    ? 'claude'
                     : shell.status === 'completed'
                       ? 'success'
                       : shell.status === 'killed'
                         ? 'warning'
                         : 'error',
-                  shell.title ?? `$ ${shell.command}`,
+                  shell.title ?? 'Command',
                   since(shell.startedAt, shell.endedAt),
                   shell.status !== 'running',
+                  false,
+                  folded.has(`shell:${shell.id}`) ? undefined : copyButtons(shell),
                 )}
-                {!folded.has(`shell:${shell.id}`) && shell.title !== undefined && (
-                  <Box paddingLeft={2}>
-                    <Text color="bashBorder" dimColor={shell.status !== 'running'} wrap="wrap">
-                      $ {clip(shell.command, textCols, COMMAND_LINES)}
-                    </Text>
-                  </Box>
-                )}
+                {!folded.has(`shell:${shell.id}`) &&
+                  command(`cmd-${shell.id}`, shell.command, shell.status !== 'running')}
                 {!folded.has(`shell:${shell.id}`) && shell.tail.length > 0 && (
                   <Box flexDirection="column" paddingLeft={2}>
                     {shell.tail.map((line, i) => (
-                      <Text key={`tail-${shell.id}-${i}`} dimColor wrap="wrap">
-                        │ {clip(line, textCols, OUTPUT_LINE_LINES)}
+                      <Text key={`tail-${shell.id}-${i}`} wrap="wrap">
+                        <Text color="subtle">│ </Text>
+                        <Text color={shell.status === 'failed' ? 'error' : OUTPUT_COLOR}>
+                          {clip(line, textCols, OUTPUT_LINE_LINES)}
+                        </Text>
                       </Text>
                     ))}
                   </Box>
@@ -731,6 +824,7 @@ export const register: Register = on => {
       )
     }
 
+    const [filled, empty] = bar(fraction, Math.max(10, Math.min(30, width - 16)))
     const facts = [
       main?.status === 'running' ? `turn ${since(main.turnStartedAt)}` : undefined,
       b.contextPercent !== undefined ? `context ${Math.round(b.contextPercent)}%` : undefined,
@@ -747,17 +841,29 @@ export const register: Register = on => {
           </Box>
           {total > 0 && (
             <Box flexDirection="row" gap={1}>
-              <Text color="success">{bar(fraction, Math.max(10, Math.min(30, width - 16)))}</Text>
+              <Text>
+                <Text color={fraction === 1 ? 'success' : 'claude'}>{filled}</Text>
+                <Text color="subtle">{empty}</Text>
+              </Text>
               <Text bold>{Math.round(fraction * 100)}%</Text>
               <Text dimColor>
                 {done}/{total}
               </Text>
             </Box>
           )}
+          <Text color="subtle">{'─'.repeat(width)}</Text>
         </Box>
-        {main !== undefined && renderLoop(main, 0)}
+        {main !== undefined ? (
+          renderLoop(main, 0)
+        ) : (
+          <Text dimColor italic>
+            Nothing yet: tasks, commands and subagents show here as the session works.
+          </Text>
+        )}
         {hasFinished && (
-          <Button key="clear" plain label="clear finished" onPress={() => void update($, board, withoutFinished)} />
+          <Button key="clear" plain onPress={() => void update($, board, withoutFinished)}>
+            <Text color="subtle">✕ clear finished</Text>
+          </Button>
         )}
       </Box>
     )

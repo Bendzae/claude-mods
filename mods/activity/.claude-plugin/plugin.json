@@ -1,6 +1,6 @@
 {
   "name": "activity",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "A side panel of what the session is doing: tasks, background shells with their latest output, subagents nested with their own, times and overall progress",
   "author": {
     "name": "Ben"

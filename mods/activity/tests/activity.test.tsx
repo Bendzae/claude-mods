@@ -129,6 +129,11 @@ test('a foreground command shows its command and how long it has run', async ($,
   on('agent.list', () => ({ value: [] as never }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  const copied: string[] = []
+  on('ui.copy', (_$, e) => {
+    copied.push(e.text)
+    return { value: { isCopied: true as const } }
+  })
   let finish = () => {}
   on('tool.call', async (_$, e) => {
     if ((e as unknown as { command?: string }).command === 'ls') {
@@ -168,6 +173,16 @@ test('a foreground command shows its command and how long it has run', async ($,
   expect(fold?.key).toMatch(/^toggle-shell:fg-/)
   await ui.press({ key: fold?.key ?? '' })
   expect(await ui.find({ text: /Finished release/ })).toBeDefined()
+
+  // Its clipboard button copies the whole output.
+  await ui.press({ key: (fold?.key ?? '').replace('toggle-shell:', 'copy-') })
+  await clock.advance(10)
+  expect(copied).toEqual(['Compiling game\nFinished release'])
+
+  // And the one on its command line copies the command.
+  await ui.press({ key: (fold?.key ?? '').replace('toggle-shell:', 'copy-cmd-') })
+  await clock.advance(10)
+  expect(copied.at(-1)).toBe('cargo build --release')
   await ui.unmount()
 })
 
