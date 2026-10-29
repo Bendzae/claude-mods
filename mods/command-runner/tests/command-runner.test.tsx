@@ -38,6 +38,9 @@ function engine(on: On, decision: 'allow' | 'ask' | 'deny' = 'allow') {
   on('tool.check', () => ({ decision, reason: decision === 'deny' ? 'Bash(make:*) is denied' : undefined }))
   on('tool.call', { tool: 'AskUserQuestion' }, () => ({ result: { answers: { q: 'Run' } } as never, text: 'Run' }))
   on('process.run', (_$, e) => {
+    if (e.argv[0] === '/usr/bin/pgrep') {
+      return { value: { exitCode: 0, stdout: '4243\n', stderr: '' } as never }
+    }
     kills.push([...e.argv])
     killed()
     return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
@@ -71,12 +74,13 @@ test('a run streams into the pane and the pane stops its process group', async (
   expect(ran.text ?? JSON.stringify(ran.result)).toContain('Started')
   expect(spawned[0]?.slice(-3)).toEqual(['/bin/zsh', '-c', 'make'])
   expect(await ui.find({ text: /\$ make/ })).toBeDefined()
-  expect(await ui.find({ text: /^Compiling a$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Compiling a$/ })).toMatchObject({ children: [{ props: { color: 'green' }, children: ['Compiling a'] }] })
   expect(await ui.find({ text: /^Compiling b$/ })).toBeDefined()
   expect(await ui.find({ text: /command_runner_pid/ })).toBeUndefined()
+  expect(await ui.find({ text: /\u001b/ })).toBeUndefined()
 
   await ui.press({ key: 'stop-0-1' })
-  expect(kills[0]).toEqual(['/bin/kill', '-s', 'TERM', '--', '-4242'])
+  expect(kills[0]).toEqual(['/bin/kill', '-s', 'TERM', '--', '-4242', '-4243'])
   expect(await ui.find({ text: /SIGTERM/ })).toBeDefined()
   expect(await ui.find({ text: /\[stop\]/ })).toBeUndefined()
 
