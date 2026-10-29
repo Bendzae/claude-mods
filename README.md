@@ -21,6 +21,13 @@ folder under `mods/` and an entry in `.claude-plugin/marketplace.json`.
   fill on top. Click an agent or a shell to fold it; `clear finished` tidies
   up; `/activity` reopens the panel.
 
+- **command-runner**: a Commands tab for shell commands you want to watch
+  beside the chat. `/run-command <what to run>` asks the session to work out
+  the command and start it there; its output streams into the tab, `[stop]`
+  ends it (and whatever it started), `[kill]` if it won't. Click an earlier
+  run to see its output again. The command passes your Bash permission rules
+  first, asking when they would. No terminal: nothing interactive, no colours.
+
 ## Installing
 
 On this machine the marketplace is this folder, so sessions read the mods from
@@ -30,6 +37,7 @@ here directly. After editing one, run `/reload-plugins` in a session.
 claude plugin marketplace add ~/code/claude-mods
 claude plugin install idea-queue@claude-mods --scope user
 claude plugin install activity@claude-mods --scope user
+claude plugin install command-runner@claude-mods --scope user
 ```
 
 On another machine, from GitHub (the repository is private, so `gh` or git
@@ -38,6 +46,7 @@ needs access to it):
 ```
 /plugin install idea-queue --marketplace Bendzae/claude-mods
 /plugin install activity --marketplace Bendzae/claude-mods
+/plugin install command-runner --marketplace Bendzae/claude-mods
 ```
 
 ## Developing a mod
