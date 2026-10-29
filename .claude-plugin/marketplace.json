@@ -14,6 +14,11 @@
       "name": "activity",
       "source": "./mods/activity",
       "description": "A side panel of what the session is doing: tasks, background shells with their latest output, subagents nested with their own, running times and overall progress"
+    },
+    {
+      "name": "command-runner",
+      "source": "./mods/command-runner",
+      "description": "A Commands tab in the side panel: /run-command asks Claude to run something there, its output streams live and the tab stops it"
     }
   ]
 }
