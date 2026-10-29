@@ -20,21 +20,107 @@ let runCount = 0
 
 // The command runs in a process group of its own, so a stop reaches whatever
 // it started too; the wrapper writes the group's id to stderr before the exec.
+// `script` gives the command a terminal of its own, so it writes its colours;
+// that terminal's processes are a group of their own again.
 const PID_MARK = /__command_runner_pid__=(\d+)\n/
 const WRAPPER = 'setpgrp(0, 0); print STDERR "__command_runner_pid__=$$\\n"; exec @ARGV or die "exec: $!\\n"'
+const NO_PAGER = { PAGER: 'cat', GIT_PAGER: 'cat' }
 
 // eslint-disable-next-line no-control-regex
-const ANSI = /\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g
+const ESCAPE = /\u001b(?:\[[0-9;:?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g
 // eslint-disable-next-line no-control-regex
-const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f]/g
+const SGR = /^\u001b\[[0-9;:]*m$/
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u0007\u000b-\u001a\u001c-\u001f\u007f]/g
 
-/** A line as the pane can draw it: no colour codes, only what the last carriage return left. */
+/** A line as the pane can draw it: colour codes kept, other escapes dropped, only what the last carriage return left. */
 function clean(line: string): string {
-  const visible = line.replace(ANSI, '').replace(/\r+$/, '')
-  return visible
-    .slice(visible.lastIndexOf('\r') + 1)
-    .replace(/\t/g, '    ')
-    .replace(CONTROL, '')
+  let visible = line.replace(ESCAPE, code => (SGR.test(code) ? code : '')).replace(/\r+$/, '')
+  visible = visible.slice(visible.lastIndexOf('\r') + 1)
+  while (/[^\b]\u0008/.test(visible)) {
+    visible = visible.replace(/[^\b]\u0008/, '')
+  }
+  return visible.replace(/\t/g, '    ').replace(CONTROL, '')
+}
+
+type Style = {
+  color?: string
+  backgroundColor?: string
+  bold?: boolean
+  dimColor?: boolean
+  italic?: boolean
+  underline?: boolean
+  inverse?: boolean
+  strikethrough?: boolean
+}
+
+const NAMES = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white']
+
+const hex = (...rgb: number[]) => `#${rgb.map(c => Math.max(0, Math.min(255, c)).toString(16).padStart(2, '0')).join('')}`
+
+/** One of the 256 palette colours: the 16 by name, so they follow the person's terminal theme. */
+function paletteColor(n: number): string {
+  if (n < 8) return NAMES[n] ?? 'white'
+  if (n < 16) return `${NAMES[n - 8]}Bright`
+  if (n < 232) {
+    const level = (c: number) => (c === 0 ? 0 : 55 + c * 40)
+    const i = n - 16
+    return hex(level(Math.floor(i / 36)), level(Math.floor(i / 6) % 6), level(i % 6))
+  }
+  const gray = 8 + (n - 232) * 10
+  return hex(gray, gray, gray)
+}
+
+/** The style after one SGR sequence's parameters. */
+function applySgr(style: Style, params: number[]): Style {
+  let next = { ...style }
+  for (let i = 0; i < params.length; i++) {
+    const p = params[i] ?? 0
+    if (p === 0) next = {}
+    else if (p === 1) next.bold = true
+    else if (p === 2) next.dimColor = true
+    else if (p === 3) next.italic = true
+    else if (p === 4) next.underline = true
+    else if (p === 7) next.inverse = true
+    else if (p === 9) next.strikethrough = true
+    else if (p === 22) next = { ...next, bold: undefined, dimColor: undefined }
+    else if (p === 23) next.italic = undefined
+    else if (p === 24) next.underline = undefined
+    else if (p === 27) next.inverse = undefined
+    else if (p === 29) next.strikethrough = undefined
+    else if (p >= 30 && p <= 37) next.color = NAMES[p - 30]
+    else if (p >= 90 && p <= 97) next.color = `${NAMES[p - 90]}Bright`
+    else if (p === 39) next.color = undefined
+    else if (p >= 40 && p <= 47) next.backgroundColor = NAMES[p - 40]
+    else if (p >= 100 && p <= 107) next.backgroundColor = `${NAMES[p - 100]}Bright`
+    else if (p === 49) next.backgroundColor = undefined
+    else if (p === 38 || p === 48) {
+      const key = p === 38 ? 'color' : 'backgroundColor'
+      if (params[i + 1] === 5) {
+        next[key] = paletteColor(params[i + 2] ?? 0)
+        i += 2
+      } else if (params[i + 1] === 2) {
+        next[key] = hex(params[i + 2] ?? 0, params[i + 3] ?? 0, params[i + 4] ?? 0)
+        i += 4
+      }
+    }
+  }
+  return next
+}
+
+/** A line cut into runs of one style each. */
+function styled(line: string): { text: string; style: Style }[] {
+  const parts: { text: string; style: Style }[] = []
+  let style: Style = {}
+  let at = 0
+  // eslint-disable-next-line no-control-regex
+  for (const code of line.matchAll(/\u001b\[([0-9;:]*)m/g)) {
+    if (code.index > at) parts.push({ text: line.slice(at, code.index), style })
+    style = applySgr(style, (code[1] ?? '').split(/[;:]/).map(p => (p === '' ? 0 : Number(p))))
+    at = code.index + code[0].length
+  }
+  if (at < line.length) parts.push({ text: line.slice(at), style })
+  return parts
 }
 
 function withOutput(run: CommandRun, text: string): CommandRun {
@@ -79,7 +165,11 @@ async function start($: EngineInterface, command: string, cwd: string | undefine
 /** Streams a run's output into its record; `started` once its process group is known or it has ended. */
 async function follow($: EngineInterface, id: string, command: string, cwd: string | undefined, started: () => void) {
   const shell = (await $.env.get('SHELL')) ?? '/bin/sh'
-  const child = $.process.spawn({ argv: ['/usr/bin/perl', '-e', WRAPPER, shell, '-c', command], cwd })
+  const child = $.process.spawn({
+    argv: ['/usr/bin/perl', '-e', WRAPPER, '/usr/bin/script', '-q', '/dev/null', shell, '-c', command],
+    cwd,
+    env: NO_PAGER,
+  })
   let hasPid = false
   try {
     for await (const { stream, text } of child) {
@@ -119,7 +209,14 @@ async function follow($: EngineInterface, id: string, command: string, cwd: stri
   }
 }
 
-/** Stops a run's process group: TERM first, KILL when it is already stopping. */
+/** Signals a run's process group and the group of the terminal `script` opened for it. */
+async function signalRun($: EngineInterface, pid: number, signal: 'TERM' | 'KILL') {
+  const { stdout } = await $.process.run(['/usr/bin/pgrep', '-P', String(pid)])
+  const groups = [pid, ...stdout.split(/\s+/).filter(Boolean).map(Number)]
+  await $.process.run(['/bin/kill', '-s', signal, '--', ...groups.map(group => `-${group}`)])
+}
+
+/** Stops a run: TERM first, KILL when it is already stopping. */
 async function stop($: EngineInterface, id: string) {
   const run = (await read($, runs)).find(one => one.id === id)
   if (run === undefined || !isLive(run) || run.pid === undefined) {
@@ -127,7 +224,7 @@ async function stop($: EngineInterface, id: string) {
   }
   const signal = run.status === 'stopping' ? 'KILL' : 'TERM'
   await changeRun($, id, one => ({ ...one, status: 'stopping' }))
-  await $.process.run(['/bin/kill', '-s', signal, '--', `-${run.pid}`])
+  await signalRun($, run.pid, signal)
 }
 
 /** Ends what an earlier load of the module left running: its stream went with it. */
@@ -138,7 +235,7 @@ async function stopOrphans($: EngineInterface, why: string) {
       continue
     }
     if (run.pid !== undefined) {
-      await $.process.run(['/bin/kill', '-s', 'TERM', '--', `-${run.pid}`]).catch(() => undefined)
+      await signalRun($, run.pid, 'TERM').catch(() => undefined)
     }
     await changeRun($, run.id, one => ({ ...withOutput(one, `\n(${why})\n`), status: 'stopped', endedAt: at }))
   }
@@ -323,11 +420,20 @@ export const register: Register = on => {
             {isLive(current) ? 'No output yet.' : 'No output.'}
           </Text>
         ) : (
-          output.slice(-room).map((line, i) => (
-            <Text key={`line-${i}`} wrap="truncate-end">
-              {line === '' ? ' ' : line}
-            </Text>
-          ))
+          output.slice(-room).map((line, i) => {
+            const parts = styled(line)
+            return (
+              <Text key={`line-${i}`} wrap="truncate-end">
+                {parts.length === 0
+                  ? ' '
+                  : parts.map((part, j) => (
+                      <Text key={`part-${i}-${j}`} {...part.style}>
+                        {part.text}
+                      </Text>
+                    ))}
+              </Text>
+            )
+          })
         )}
         {hasFinished && (
           <Button

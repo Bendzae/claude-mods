@@ -26,7 +26,9 @@ folder under `mods/` and an entry in `.claude-plugin/marketplace.json`.
   the command and start it there; its output streams into the tab, `[stop]`
   ends it (and whatever it started), `[kill]` if it won't. Click an earlier
   run to see its output again. The command passes your Bash permission rules
-  first, asking when they would. No terminal: nothing interactive, no colours.
+  first, asking when they would. It runs under a pseudo-terminal, so programs
+  keep their colours, which the tab draws in your terminal's palette. Not a
+  real terminal though: nothing interactive (input ends at once, pagers off).
 
 ## Installing
 
