@@ -1,6 +1,6 @@
 {
   "name": "command-runner",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A Commands tab in the side panel: /run-command asks Claude to run something there, its output streams live and the tab stops it",
   "author": {
     "name": "Ben"

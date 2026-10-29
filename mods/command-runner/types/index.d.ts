@@ -11,6 +11,8 @@ export type CommandRun = {
   exitCode?: number
   signal?: string
   lines: string[]
+  /** How many lines came before `lines[0]`: those past the kept ones. */
+  firstLine?: number
   /** Output after the last newline: a progress line still being rewritten. */
   partial: string
 }
@@ -21,6 +23,8 @@ declare module 'claude-code' {
       runs: CommandRun[]
       /** The run whose output shows; empty for the newest. */
       shown: string
+      /** The line the output window ends before, counted from the run's first; -1 follows the newest. */
+      scrollEnd: number
       now: number
     }
   }

@@ -49,6 +49,10 @@ function engine(on: On, decision: 'allow' | 'ask' | 'deny' = 'allow') {
     spawned.push([...e.argv])
     const command = e.argv.at(-1)
     yield { stream: 'stderr' as const, text: '__command_runner_pid__=4242\n' }
+    if (command === 'many') {
+      yield { stream: 'stdout' as const, text: Array.from({ length: 50 }, (_, i) => `line ${i + 1}\n`).join('') }
+      return { value: { code: 0, signal: null } } as never
+    }
     if (command !== 'make') {
       yield { stream: 'stdout' as const, text: 'done\n' }
       return { value: { code: 0, signal: null } } as never
@@ -104,4 +108,33 @@ test('a command the permission settings deny does not run', async ($, on) => {
   const ran = await $.tool.call({ tool: RUN_TOOL, command: 'make' } as never)
   expect(ran.deny).toContain('denied')
   expect(spawned).toHaveLength(0)
+})
+
+test('the output follows the newest lines, scrolls back, and jumps to the latest', async ($, on) => {
+  engine(on)
+  await start($)
+  const ui = await $.ui.mount({
+    plugin: 'command-runner',
+    surface: 'terminal',
+    ...PANE,
+    props: { ...PANE.props, scroll: { offset: 0, bodyRows: 15 } },
+  })
+  await $.tool.call({ tool: RUN_TOOL, command: 'many' } as never)
+  expect(await ui.find({ text: /^line 50$/ })).toBeDefined()
+  expect(await ui.find({ text: /^line 41$/ })).toBeDefined()
+  expect(await ui.find({ text: /^line 40$/ })).toBeUndefined()
+
+  const scroll = { component: 'Pane', requestId: 'command-runner', offset: 0, origin: { kind: 'person' } }
+  await $.ui.scroll({ ...scroll, by: -5 } as never)
+  expect(await ui.find({ text: /^line 45$/ })).toBeDefined()
+  expect(await ui.find({ text: /^line 46$/ })).toBeUndefined()
+  expect(await ui.find({ text: /5 newer lines/ })).toBeDefined()
+
+  await $.ui.scroll({ ...scroll, by: -100 } as never)
+  expect(await ui.find({ text: /^line 1$/ })).toBeDefined()
+
+  await ui.press({ key: 'latest' })
+  expect(await ui.find({ text: /^line 50$/ })).toBeDefined()
+  expect(await ui.find({ text: /newer lines/ })).toBeUndefined()
+  await ui.unmount()
 })

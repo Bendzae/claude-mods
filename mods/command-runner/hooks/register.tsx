@@ -16,7 +16,10 @@ const KEEP_RUNS = 30
 const runs = atom({ plugin: 'command-runner', key: 'runs' } as const, [])
 const shown = atom({ plugin: 'command-runner', key: 'shown' } as const, '')
 const now = atom({ plugin: 'command-runner', key: 'now' } as const, 0)
+const scrollEnd = atom({ plugin: 'command-runner', key: 'scrollEnd' } as const, -1)
 let runCount = 0
+/** Output rows the pane drew last, which a scroll keeps filled. */
+let lastRoom = 10
 
 // The command runs in a process group of its own, so a stop reaches whatever
 // it started too; the wrapper writes the group's id to stderr before the exec.
@@ -126,7 +129,18 @@ function styled(line: string): { text: string; style: Style }[] {
 function withOutput(run: CommandRun, text: string): CommandRun {
   const pieces = (run.partial + text).split('\n')
   const partial = pieces.pop() ?? ''
-  return { ...run, partial, lines: [...run.lines, ...pieces.map(clean)].slice(-KEEP_LINES) }
+  const lines = [...run.lines, ...pieces.map(clean)]
+  const dropped = Math.max(0, lines.length - KEEP_LINES)
+  return { ...run, partial, lines: lines.slice(dropped), firstLine: (run.firstLine ?? 0) + dropped }
+}
+
+const outputOf = (run: CommandRun) => (run.partial === '' ? run.lines : [...run.lines, clean(run.partial)])
+
+const currentRun = (list: CommandRun[], shownId: string) => list.find(run => run.id === shownId) ?? list.at(-1)
+
+async function show($: EngineInterface, id: string) {
+  await update($, shown, () => id)
+  await update($, scrollEnd, () => -1)
 }
 
 async function changeRun($: EngineInterface, id: string, fn: (run: CommandRun) => CommandRun) {
@@ -155,7 +169,7 @@ async function start($: EngineInterface, command: string, cwd: string | undefine
     const dropped = new Set(all.filter(one => !isLive(one)).slice(0, extra).map(one => one.id))
     return all.filter(one => !dropped.has(one.id))
   })
-  await update($, shown, () => '')
+  await show($, '')
   await update($, now, () => at)
   void $.ui.open({ id: PANE, title: TITLE })
   await new Promise<void>(started => void follow($, run.id, command, cwd, started))
@@ -341,13 +355,27 @@ export const register: Register = on => {
     return { result: `Started in the Commands panel: ${command}` }
   }).catch(() => ({ deny: 'The command runner could not start it.' }))
 
+  // The pane scrolls its output itself, so it can follow the newest lines and
+  // hold still while scrolled back.
+  on('ui.scroll', { requestId: PANE }, async ($, e) => {
+    const run = currentRun(await read($, runs), await read($, shown))
+    if (run === undefined) {
+      return {}
+    }
+    const first = run.firstLine ?? 0
+    const length = outputOf(run).length
+    const total = first + length
+    const end = await read($, scrollEnd)
+    const moved = Math.max(first + Math.min(lastRoom, length), (end < 0 ? total : end) + e.by)
+    await update($, scrollEnd, () => (moved >= total ? -1 : moved))
+    return {}
+  })
+
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const list = await read($, runs)
     const at = await read($, now)
-    const shownId = await read($, shown)
-    const width = Math.max(20, e.props.bodyColumns)
-    const current = list.find(run => run.id === shownId) ?? list.at(-1)
+    const current = currentRun(list, await read($, shown))
 
     if (current === undefined) {
       return (
@@ -386,7 +414,7 @@ export const register: Register = on => {
         <Box key={`run-${run.id}`} flexDirection="row" gap={1}>
           <Text color={color}>{mark}</Text>
           <Box flexGrow={1} flexShrink={1}>
-            <Button key={`show-${run.id}`} plain onPress={() => void update($, shown, () => run.id)}>
+            <Button key={`show-${run.id}`} plain onPress={() => void show($, run.id)}>
               <Text bold={isShown} dimColor={!isShown} wrap="truncate-end">
                 $ {run.command}
               </Text>
@@ -402,10 +430,19 @@ export const register: Register = on => {
       )
     }
 
+    const width = Math.max(20, e.props.bodyColumns)
     const others = list.filter(run => run.id !== current.id).slice(-8)
-    const output = current.partial === '' ? current.lines : [...current.lines, clean(current.partial)]
-    // The pane's rows less the headers, the rules, the cwd row and the clear row.
-    const room = Math.max(3, e.props.scroll.bodyRows - others.length - 5)
+    const output = outputOf(current)
+    const first = current.firstLine ?? 0
+    const total = first + output.length
+    const wantedEnd = await read($, scrollEnd)
+    const isFollowing = wantedEnd < 0 || wantedEnd >= total
+    // The pane's rows less the headers, the rules, the cwd row, the clear row
+    // and, scrolled back, the row saying so.
+    const room = Math.max(3, e.props.scroll.bodyRows - others.length - 5 - (isFollowing ? 0 : 1))
+    lastRoom = room
+    const end = isFollowing ? total : Math.max(first + Math.min(room, output.length), wantedEnd)
+    const start = Math.max(first, end - room)
     const hasFinished = list.some(run => !isLive(run))
 
     return (
@@ -420,14 +457,15 @@ export const register: Register = on => {
             {isLive(current) ? 'No output yet.' : 'No output.'}
           </Text>
         ) : (
-          output.slice(-room).map((line, i) => {
+          output.slice(start - first, end - first).map((line, i) => {
             const parts = styled(line)
+            const n = start + i
             return (
-              <Text key={`line-${i}`} wrap="truncate-end">
+              <Text key={`line-${n}`} wrap="truncate-end">
                 {parts.length === 0
                   ? ' '
                   : parts.map((part, j) => (
-                      <Text key={`part-${i}-${j}`} {...part.style}>
+                      <Text key={`part-${n}-${j}`} {...part.style}>
                         {part.text}
                       </Text>
                     ))}
@@ -435,13 +473,21 @@ export const register: Register = on => {
             )
           })
         )}
+        {!isFollowing && (
+          <Box key="scrolled" flexDirection="row" gap={1}>
+            <Text dimColor>↓ {total - end} newer lines</Text>
+            <Button key="latest" plain onPress={() => void update($, scrollEnd, () => -1)}>
+              <Text color="claude">[latest]</Text>
+            </Button>
+          </Box>
+        )}
         {hasFinished && (
           <Button
             key="clear"
             plain
             onPress={() => {
               void update($, runs, all => all.filter(isLive))
-              void update($, shown, () => '')
+              void show($, '')
             }}
           >
             <Text color="subtle">✕ clear finished</Text>
