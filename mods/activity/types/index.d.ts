@@ -10,8 +10,10 @@ export type ActivityTask = {
 /** A shell command run in the background, with the last lines of its output. */
 export type ActivityShell = {
   id: string
-  /** What the model said it does, when it said. */
+  /** What the model said it does, when it said, else what a small model made of the command. */
   title?: string
+  /** A small model was asked for a title: it is not asked again. */
+  isTitleAsked?: boolean
   command: string
   status: 'running' | 'completed' | 'failed' | 'killed'
   startedAt: number

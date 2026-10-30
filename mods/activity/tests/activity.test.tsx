@@ -45,6 +45,19 @@ function engine(on: On, agents: Agent[]) {
   return clock
 }
 
+/** Stands in for the engine with every Bash call run in the foreground. */
+function foreground(on: On) {
+  const clock = mock.clock(on)
+  mock.store(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, percent: 10 }, rateLimits: [] } as never }))
+  on('agent.list', () => ({ value: [] as never }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('tool.call', () => ({ result: { stdout: 'ok', stderr: '', interrupted: false } as never, text: 'ok' }))
+  return clock
+}
+
 async function start($: Engine) {
   await $.session.start({ cwd: '/p', surface: 'terminal', isInteractive: true })
 }
@@ -247,6 +260,48 @@ test('a command run without a description is labelled by the command itself', as
   expect(await ui.find({ text: /^\$ git status --short$/ })).toBeDefined()
   // Not again on a row of its own under the label.
   expect(await ui.find({ text: /^git status --short$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('commands without a description get one from a small model, in a batch', async ($, on) => {
+  const clock = foreground(on)
+  const asked: { model: string; ids: string[] }[] = []
+  on('model.complete', (_$, e) => {
+    const commands = JSON.parse(String(e.prompt)) as { id: string; command: string }[]
+    asked.push({ model: e.model, ids: commands.map(c => c.id) })
+    const titles = Object.fromEntries(commands.map(c => [c.id, c.command.startsWith('git') ? 'Show changed files' : 'Count lines']))
+    return { value: { isAnswered: true, text: `Here: ${JSON.stringify(titles)}`, usage: {} } as never }
+  })
+  await start($)
+  const ui = await $.ui.mount({ plugin: 'activity', surface: 'terminal', ...PANE })
+
+  await $.tool.call({ tool: 'Bash', command: 'git status --short' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'wc -l *.ts' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'ls', description: 'List files' } as never)
+  expect(await ui.find({ text: /^\$ git status --short$/ })).toBeDefined()
+
+  await clock.advance(10000)
+  expect(asked).toHaveLength(1)
+  expect(asked[0]?.model).toBe('haiku')
+  expect(asked[0]?.ids).toHaveLength(2)
+  expect(await ui.find({ text: /^Show changed files$/ })).toBeDefined()
+  expect(await ui.find({ text: /^Count lines$/ })).toBeDefined()
+
+  // Each is asked about once.
+  await clock.advance(10000)
+  expect(asked).toHaveLength(1)
+  await ui.unmount()
+})
+
+test('a folded command keeps its label to one line', async ($, on) => {
+  foreground(on)
+  await start($)
+  const ui = await $.ui.mount({ plugin: 'activity', surface: 'terminal', ...PANE })
+  const long = `echo ${'word '.repeat(40)}`
+  await $.tool.call({ tool: 'Bash', command: long } as never)
+  await $.tool.call({ tool: 'Bash', command: 'ls', description: 'List files' } as never)
+  const label = await ui.find({ text: /^\$ echo word/ })
+  expect(label?.props).toMatchObject({ wrap: 'truncate-end' })
   await ui.unmount()
 })
 
