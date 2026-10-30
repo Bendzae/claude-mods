@@ -339,6 +339,14 @@ function bar(fraction: number, width: number): [string, string] {
 
 const SPIN = ['◐', '◓', '◑', '◒']
 
+const BASH_DESCRIPTIONS = {
+  id: 'activity:bash-descriptions',
+  text:
+    'Give every Bash call a `description`, even for quick reads like cat, grep or git status: ' +
+    "the person follows what you run by those descriptions in their Activity side panel.",
+  scope: 'session',
+} as const
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const at = await $.clock.now()
@@ -371,6 +379,12 @@ export const register: Register = on => {
     await $.ui.open({ id: PANE, title: 'Activity' })
 
     return { text: 'Activity panel opened.' }
+  })
+
+  // Without one a command's row can only show the command itself.
+  on('prompt.compose', async ($, e, next) => {
+    const { sections } = await next(e)
+    return { sections: [...sections, BASH_DESCRIPTIONS] }
   })
 
   on('turn.start', async ($, e, next) => {
@@ -620,7 +634,7 @@ export const register: Register = on => {
       1 +
       (folded.has(`shell:${shell.id}`)
         ? 0
-        : wrappedRows(`$ ${shell.command}`, textCols, COMMAND_LINES) +
+        : (shell.title !== undefined ? wrappedRows(`$ ${shell.command}`, textCols, COMMAND_LINES) : 0) +
           shell.tail.reduce((sum, line) => sum + wrappedRows(`│ ${line}`, textCols, OUTPUT_LINE_LINES), 0))
     const loopRows = (loop: ActivityLoop): number => {
       if (folded.has(`loop:${loop.id}`)) {
@@ -795,13 +809,14 @@ export const register: Register = on => {
                       : shell.status === 'killed'
                         ? 'warning'
                         : 'error',
-                  shell.title ?? 'Command',
+                  shell.title ?? `$ ${shell.command}`,
                   since(shell.startedAt, shell.endedAt),
                   shell.status !== 'running',
                   false,
                   folded.has(`shell:${shell.id}`) ? undefined : copyButtons(shell),
                 )}
                 {!folded.has(`shell:${shell.id}`) &&
+                  shell.title !== undefined &&
                   command(`cmd-${shell.id}`, shell.command, shell.status !== 'running')}
                 {!folded.has(`shell:${shell.id}`) && shell.tail.length > 0 && (
                   <Box flexDirection="column" paddingLeft={2}>

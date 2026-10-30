@@ -235,3 +235,31 @@ test('long commands and output lines wrap, up to a few lines', async ($, on) => 
   expect(await ui.find({ text: /^│ y+…$/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('a command run without a description is labelled by the command itself', async ($, on) => {
+  engine(on, [])
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  await start($)
+  const ui = await $.ui.mount({ plugin: 'activity', surface: 'terminal', ...PANE })
+
+  await $.tool.call({ tool: 'Bash', command: 'git status --short' } as never)
+  expect(await ui.find({ text: /^Command$/ })).toBeUndefined()
+  expect(await ui.find({ text: /^\$ git status --short$/ })).toBeDefined()
+  // Not again on a row of its own under the label.
+  expect(await ui.find({ text: /^git status --short$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the system prompt asks for a description on every Bash call', async ($, on) => {
+  on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'You are Claude.', scope: 'shared' as const }] }))
+  const { sections } = await $.prompt.compose({
+    model: 'claude-opus-5-5',
+    promptModel: 'claude-opus-5-5',
+    surfaces: ['terminal'],
+    tools: ['Bash'],
+    outputStyle: { name: 'default', isKeepingCodingInstructions: true },
+    traits: [],
+  } as never)
+  expect(sections.map(section => section.id)).toEqual(['intro', 'activity:bash-descriptions'])
+  expect(sections.at(-1)?.text).toContain('description')
+})
