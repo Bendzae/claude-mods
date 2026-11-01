@@ -138,3 +138,30 @@ test('the output follows the newest lines, scrolls back, and jumps to the latest
   expect(await ui.find({ text: /newer lines/ })).toBeUndefined()
   await ui.unmount()
 })
+
+test('a run folds its output away, runs again in its place, and is deleted', async ($, on) => {
+  const { spawned } = engine(on)
+  await start($)
+  const ui = await $.ui.mount({ plugin: 'command-runner', surface: 'terminal', ...PANE })
+  await $.tool.call({ tool: RUN_TOOL, command: 'ls' } as never)
+  const key = (await ui.find({ type: 'Button', text: /\$ ls/ }))?.key ?? ''
+  const id = key.replace('show-', '')
+  expect(await ui.find({ text: /^done$/ })).toBeDefined()
+
+  await ui.press({ key })
+  expect(await ui.find({ text: /^done$/ })).toBeUndefined()
+  expect(await ui.find({ text: /\$ ls/ })).toBeDefined()
+  await ui.press({ key })
+  expect(await ui.find({ text: /^done$/ })).toBeDefined()
+
+  await ui.press({ key: `rerun-${id}` })
+  expect(spawned).toHaveLength(2)
+  expect(await ui.find({ key: `show-${id}` })).toBeUndefined()
+  const again = (await ui.find({ type: 'Button', text: /\$ ls/ }))?.key ?? ''
+  expect(again).not.toBe(key)
+
+  await ui.press({ key: again.replace('show-', 'delete-') })
+  expect(await ui.find({ text: /\$ ls/ })).toBeUndefined()
+  expect(await ui.find({ text: /Nothing run yet/ })).toBeDefined()
+  await ui.unmount()
+})

@@ -17,6 +17,7 @@ const runs = atom({ plugin: 'command-runner', key: 'runs' } as const, [])
 const shown = atom({ plugin: 'command-runner', key: 'shown' } as const, '')
 const now = atom({ plugin: 'command-runner', key: 'now' } as const, 0)
 const scrollEnd = atom({ plugin: 'command-runner', key: 'scrollEnd' } as const, -1)
+const folded = atom({ plugin: 'command-runner', key: 'folded' } as const, [])
 let runCount = 0
 /** Output rows the pane drew last, which a scroll keeps filled. */
 let lastRoom = 10
@@ -230,6 +231,30 @@ async function signalRun($: EngineInterface, pid: number, signal: 'TERM' | 'KILL
   await $.process.run(['/bin/kill', '-s', signal, '--', ...groups.map(group => `-${group}`)])
 }
 
+/** Takes a finished run off the list. */
+async function remove($: EngineInterface, id: string) {
+  await update($, runs, list => list.filter(run => run.id !== id || isLive(run)))
+  await update($, folded, ids => ids.filter(one => one !== id))
+  if ((await read($, shown)) === id) {
+    await show($, '')
+  }
+}
+
+/** Runs a finished run's command again, in its place: the permission settings still refuse what they deny. */
+async function rerun($: EngineInterface, id: string) {
+  const run = (await read($, runs)).find(one => one.id === id)
+  if (run === undefined || isLive(run)) {
+    return
+  }
+  const { decision, reason } = await $.tool.check({ tool: 'Bash', input: { command: run.command } })
+  if (decision === 'deny') {
+    $.ui.toast(reason ?? 'The permission settings refuse this command.')
+    return
+  }
+  await remove($, id)
+  await start($, run.command, run.cwd)
+}
+
 /** Stops a run: TERM first, KILL when it is already stopping. */
 async function stop($: EngineInterface, id: string) {
   const run = (await read($, runs)).find(one => one.id === id)
@@ -376,6 +401,7 @@ export const register: Register = on => {
     const list = await read($, runs)
     const at = await read($, now)
     const current = currentRun(list, await read($, shown))
+    const foldedIds = await read($, folded)
 
     if (current === undefined) {
       return (
@@ -407,14 +433,26 @@ export const register: Register = on => {
         .filter(Boolean)
         .join(' · ')
 
+    const isFolded = foldedIds.includes(current.id)
+    // The shown run's header folds its output; another's shows it, unfolded.
+    const press = (run: CommandRun) => {
+      if (run.id === current.id) {
+        void update($, folded, ids => (ids.includes(run.id) ? ids.filter(one => one !== run.id) : [...ids, run.id]))
+      } else {
+        void update($, folded, ids => ids.filter(one => one !== run.id))
+        void show($, run.id)
+      }
+    }
+
     const header = (run: CommandRun) => {
       const [mark, color] = glyph(run)
       const isShown = run.id === current.id
       return (
         <Box key={`run-${run.id}`} flexDirection="row" gap={1}>
+          <Text dimColor>{isShown ? (isFolded ? '▸' : '▾') : ' '}</Text>
           <Text color={color}>{mark}</Text>
           <Box flexGrow={1} flexShrink={1}>
-            <Button key={`show-${run.id}`} plain onPress={() => void show($, run.id)}>
+            <Button key={`show-${run.id}`} plain onPress={() => press(run)}>
               <Text bold={isShown} dimColor={!isShown} wrap="truncate-end">
                 $ {run.command}
               </Text>
@@ -424,6 +462,16 @@ export const register: Register = on => {
           {isLive(run) && run.pid !== undefined && (
             <Button key={`stop-${run.id}`} plain onPress={() => void stop($, run.id)}>
               <Text color="error">{run.status === 'stopping' ? '[kill]' : '[stop]'}</Text>
+            </Button>
+          )}
+          {!isLive(run) && (
+            <Button key={`rerun-${run.id}`} plain onPress={() => void rerun($, run.id).catch(() => undefined)}>
+              <Text color="claude">↻</Text>
+            </Button>
+          )}
+          {!isLive(run) && (
+            <Button key={`delete-${run.id}`} plain onPress={() => void remove($, run.id)}>
+              <Text color="subtle">✕</Text>
             </Button>
           )}
         </Box>
@@ -451,8 +499,8 @@ export const register: Register = on => {
         {others.length > 0 && <Text color="subtle">{'─'.repeat(width)}</Text>}
         {header(current)}
         {current.cwd !== undefined && <Text dimColor wrap="truncate-end">  in {current.cwd}</Text>}
-        <Text color="subtle">{'─'.repeat(width)}</Text>
-        {output.length === 0 ? (
+        {!isFolded && <Text color="subtle">{'─'.repeat(width)}</Text>}
+        {isFolded ? null : output.length === 0 ? (
           <Text dimColor italic>
             {isLive(current) ? 'No output yet.' : 'No output.'}
           </Text>
@@ -473,7 +521,7 @@ export const register: Register = on => {
             )
           })
         )}
-        {!isFollowing && (
+        {!isFolded && !isFollowing && (
           <Box key="scrolled" flexDirection="row" gap={1}>
             <Text dimColor>↓ {total - end} newer lines</Text>
             <Button key="latest" plain onPress={() => void update($, scrollEnd, () => -1)}>

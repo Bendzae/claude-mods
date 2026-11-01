@@ -26,6 +26,8 @@ declare module 'claude-code' {
       /** The line the output window ends before, counted from the run's first; -1 follows the newest. */
       scrollEnd: number
       now: number
+      /** Runs whose output is folded away. */
+      folded: string[]
     }
   }
 }
