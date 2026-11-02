@@ -14,8 +14,8 @@ folder under `mods/` and an entry in `.claude-plugin/marketplace.json`.
   per project across sessions; `/ideas` reopens the panel.
 
 - **activity**: a side panel of what the session is doing. The main session
-  and its subagents (a Subagents group beside it that folds away whole; a
-  subagent's own nested under it), each with its status, tool
+  and each of its subagents as a section of its own beside it (a subagent's
+  own nested under it), each with its status, tool
   count, running time and current tool call; its task list with times; its
   shell commands, foreground and background, with the command and their last output lines (past ones folded, the oldest left out when the pane is full). Overall
   progress across tasks, shells and subagents, the turn's time and context

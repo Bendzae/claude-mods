@@ -127,15 +127,12 @@ test('agents and shells fold away when clicked', async ($, on) => {
   await ui.press({ key: 'toggle-shell:b1' })
   expect(await ui.find({ text: /Compiling c/ })).toBeDefined()
 
-  // The main session folds apart from its subagents, which are a group of their own.
+  // The main session folds apart from its subagents, each a section of its own.
   await ui.press({ key: 'toggle-loop:main' })
   expect(await ui.find({ text: /Main session/ })).toBeDefined()
   expect(await ui.find({ text: /Build the game/ })).toBeUndefined()
   expect(await ui.find({ text: /Explore the repo/ })).toBeDefined()
-  expect(await ui.find({ text: /Subagents/ })).toBeDefined()
-  await ui.press({ key: 'toggle-group:agents' })
-  expect(await ui.find({ text: /Subagents/ })).toBeDefined()
-  expect(await ui.find({ text: /Explore the repo/ })).toBeUndefined()
+  expect(await ui.find({ key: 'toggle-loop:a1' })).toBeDefined()
   await ui.unmount()
 })
 
