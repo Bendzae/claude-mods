@@ -708,12 +708,16 @@ export const register: Register = on => {
         ? 1
         : (shell.title !== undefined ? 1 + wrappedRows(`$ ${shell.command}`, textCols, COMMAND_LINES) : wrappedRows(`$ ${shell.command}`, textCols, COMMAND_LINES)) +
           shell.tail.reduce((sum, line) => sum + wrappedRows(`│ ${line}`, textCols, OUTPUT_LINE_LINES), 0))
+    /** A loop's subagents drawn under it: the main session's go in the Subagents group. */
+    const childrenOf = (loop: ActivityLoop) =>
+      loop.id === MAIN ? [] : loops.filter(other => other.id !== MAIN && other.parentId === loop.id)
+    const agents = loops.filter(other => other.id !== MAIN && (other.parentId ?? MAIN) === MAIN)
     const loopRows = (loop: ActivityLoop): number => {
       if (folded.has(`loop:${loop.id}`)) {
         return 1
       }
       const shown = loop.shells.filter(s => !hidden.has(s.id))
-      const children = loops.filter(other => other.id !== MAIN && (other.parentId ?? MAIN) === loop.id)
+      const children = childrenOf(loop)
       return (
         1 +
         (loop.current !== undefined
@@ -727,6 +731,11 @@ export const register: Register = on => {
         children.reduce((sum, child) => sum + loopRows(child), 0)
       )
     }
+    // The Subagents group: its header, a gap before it, and its agents unless folded.
+    const groupRows = () =>
+      agents.length === 0
+        ? 0
+        : 2 + (folded.has('group:agents') ? 0 : agents.reduce((sum, agent) => sum + loopRows(agent), 0))
     const room = e.props.scroll.bodyRows
     const chrome = 2 + (total > 0 ? 1 : 0) + 1 + (hasFinished ? 2 : 0)
     const oldestFirst = loops
@@ -734,7 +743,7 @@ export const register: Register = on => {
       .filter(shell => shell.status !== 'running')
       .sort((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
     for (const shell of oldestFirst) {
-      if (main === undefined || chrome + loopRows(main) <= room) {
+      if (main === undefined || chrome + loopRows(main) + groupRows() <= room) {
         break
       }
       hidden.add(shell.id)
@@ -856,7 +865,7 @@ export const register: Register = on => {
 
     const renderLoop = (loop: ActivityLoop, depth: number): RenderChildren => {
       const [glyph, color] = loopGlyph(loop)
-      const children = loops.filter(other => other.id !== MAIN && (other.parentId ?? MAIN) === loop.id)
+      const children = childrenOf(loop)
       const isMain = loop.id === MAIN
       const clock = isMain
         ? loop.status === 'running'
@@ -935,6 +944,27 @@ export const register: Register = on => {
       )
     }
 
+    /** The main session's subagents, a group beside it that folds away whole. */
+    const renderAgents = (): RenderChildren => {
+      const running = agents.filter(agent => !ENDED.has(agent.status)).length
+      const failed = agents.some(agent => agent.status === 'failed')
+      const [glyph, color] =
+        running > 0 ? [spin, 'claude'] : failed ? ['✗', 'error'] : ['✓', 'success']
+      const counts = [running > 0 ? `${running} running` : undefined, agents.length - running > 0 ? `${agents.length - running} done` : undefined]
+        .filter(count => count !== undefined)
+        .join(' · ')
+      return (
+        <Box key="agents" flexDirection="column">
+          {header('group:agents', glyph, color, 'Subagents', counts, false, true)}
+          {!folded.has('group:agents') && (
+            <Box flexDirection="column" paddingLeft={2}>
+              {agents.map(agent => renderLoop(agent, 0))}
+            </Box>
+          )}
+        </Box>
+      )
+    }
+
     const [filled, empty] = bar(fraction, Math.max(10, Math.min(30, width - 16)))
     const facts = [
       main?.status === 'running' ? `turn ${since(main.turnStartedAt)}` : undefined,
@@ -964,9 +994,9 @@ export const register: Register = on => {
           )}
           <Text color="subtle">{'─'.repeat(width)}</Text>
         </Box>
-        {main !== undefined ? (
-          renderLoop(main, 0)
-        ) : (
+        {main !== undefined && renderLoop(main, 0)}
+        {agents.length > 0 && renderAgents()}
+        {main === undefined && agents.length === 0 && (
           <Text dimColor italic>
             Nothing yet: tasks, commands and subagents show here as the session works.
           </Text>
