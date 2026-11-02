@@ -496,7 +496,7 @@ export const register: Register = on => {
     const loopId = e.agentId ?? MAIN
     const input = e as unknown as Loose
     const doing = describeCall(String(e.tool), input)
-    const command = str(input.description) !== undefined ? str(input.command) : undefined
+    const command = e.tool === 'Bash' ? str(input.command) : undefined
     let calledAt: number | undefined
     try {
       calledAt = await $.clock.now()
@@ -701,6 +701,8 @@ export const register: Register = on => {
     // Columns left for a command or output line under a shell: the pane less
     // the indents and the `$ ` or `│ ` before it.
     const textCols = Math.max(10, width - 8)
+    /** A running command's label: its description, or the command itself. */
+    const runningLabel = (loop: ActivityLoop) => (loop.current ?? '').replace(/^Bash: /, '')
     const shellRows = (shell: ActivityShell) =>
       (folded.has(`shell:${shell.id}`)
         ? 1
@@ -715,7 +717,9 @@ export const register: Register = on => {
       return (
         1 +
         (loop.current !== undefined
-          ? 1 + (loop.currentCommand !== undefined ? wrappedRows(`$ ${loop.currentCommand}`, textCols, COMMAND_LINES) : 0)
+          ? 1 + (loop.currentCommand !== undefined && runningLabel(loop) !== oneLine(loop.currentCommand, 60)
+              ? wrappedRows(`$ ${loop.currentCommand}`, textCols, COMMAND_LINES)
+              : 0)
           : 0) +
         loop.tasks.length +
         (shown.length < loop.shells.length ? 1 : 0) +
@@ -807,6 +811,40 @@ export const register: Register = on => {
         : []),
     ]
 
+    /** What a loop is doing now, last under it: a running command drawn as the
+     * commands before it are, another tool call as one line. */
+    const current = (loop: ActivityLoop) => {
+      const label = runningLabel(loop)
+      if (loop.currentCommand === undefined) {
+        return (
+          <Box key={`now-${loop.id}`} flexDirection="row" gap={1}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text color="suggestion" italic wrap="truncate-end">
+                ↳ {loop.current}
+              </Text>
+            </Box>
+            <Text dimColor>{since(loop.currentStartedAt)}</Text>
+          </Box>
+        )
+      }
+      const isDescribed = label !== oneLine(loop.currentCommand, 60)
+      return (
+        <Box key={`now-${loop.id}`} flexDirection="column">
+          <Box flexDirection="row" gap={1}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text wrap="truncate-end">
+                <Text dimColor>▾ </Text>
+                <Text color="claude">{spin} </Text>
+                {isDescribed ? label : `$ ${clip(loop.currentCommand, textCols, 1)}`}
+              </Text>
+            </Box>
+            <Text dimColor>{since(loop.currentStartedAt)}</Text>
+          </Box>
+          {isDescribed && command(`now-cmd-${loop.id}`, loop.currentCommand, false)}
+        </Box>
+      )
+    }
+
     const loopGlyph = (loop: ActivityLoop): [string, string] => {
       if (loop.status === 'running' || loop.status === 'pending') return [spin, 'claude']
       if (loop.status === 'waiting') return ['◔', 'suggestion']
@@ -839,19 +877,6 @@ export const register: Register = on => {
           )}
           {!folded.has(`loop:${loop.id}`) && (
           <Box flexDirection="column" paddingLeft={2}>
-            {loop.current !== undefined && (
-              <Box flexDirection="column">
-                <Box flexDirection="row" gap={1}>
-                  <Box flexGrow={1} flexShrink={1}>
-                    <Text color="suggestion" italic wrap="truncate-end">
-                      ↳ {loop.current}
-                    </Text>
-                  </Box>
-                  <Text dimColor>{since(loop.currentStartedAt)}</Text>
-                </Box>
-                {loop.currentCommand !== undefined && command(`now-${loop.id}`, loop.currentCommand, false)}
-              </Box>
-            )}
             {loop.tasks.map(task =>
               row(
                 `task-${loop.id}-${task.id}`,
@@ -902,6 +927,7 @@ export const register: Register = on => {
                 )}
               </Box>
             ))}
+            {loop.current !== undefined && current(loop)}
             {children.map(child => renderLoop(child, depth + 1))}
           </Box>
           )}

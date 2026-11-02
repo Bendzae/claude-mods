@@ -162,13 +162,13 @@ test('a foreground command shows its command and how long it has run', async ($,
 
   const call = $.tool.call({ tool: 'Bash', command: 'cargo build --release', description: 'Build the game' } as never)
   await clock.advance(65000)
-  expect(await ui.find({ text: /↳ Bash: Build the game/ })).toBeDefined()
+  expect(await ui.find({ text: /^▾ [◐◓◑◒] Build the game$/ })).toBeDefined()
   expect(await ui.find({ text: /\$ cargo build --release/ })).toBeDefined()
   expect(await ui.find({ text: /^1m 05s$/ })).toBeDefined()
 
   finish()
   await call
-  expect(await ui.find({ text: /↳ Bash/ })).toBeUndefined()
+  expect(await ui.find({ text: /^▾ [◐◓◑◒] Build the game$/ })).toBeUndefined()
   // Kept once done, having run a while: its command, time and last lines.
   expect(await ui.find({ text: /^Build the game$/ })).toBeDefined()
   expect(await ui.find({ text: /\$ cargo build --release/ })).toBeDefined()
