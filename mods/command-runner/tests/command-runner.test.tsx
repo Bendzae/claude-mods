@@ -165,3 +165,29 @@ test('a run folds its output away, runs again in its place, and is deleted', asy
   expect(await ui.find({ text: /Nothing run yet/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('the model reads a run’s status and output, without colour codes', async ($, on) => {
+  const { clock } = engine(on)
+  await start($)
+  const ui = await $.ui.mount({ plugin: 'command-runner', surface: 'terminal', ...PANE })
+  const ran = await $.tool.call({ tool: RUN_TOOL, command: 'make' } as never)
+  const id = /run (\S+):/.exec(String(ran.result))?.[1]
+  await clock.settle()
+
+  const read = await $.tool.call({ tool: 'mcp__command-runner__output', id } as never)
+  expect(read.result).toContain('$ make')
+  expect(read.result).toContain('Status: running')
+  expect(read.result).toContain('Compiling a\nCompiling b')
+  expect(read.result).not.toContain('\u001b')
+  await ui.press({ key: `stop-${id}` })
+
+  await $.tool.call({ tool: RUN_TOOL, command: 'many' } as never)
+  await clock.settle()
+  const newest = await $.tool.call({ tool: 'mcp__command-runner__output', lines: 2 } as never)
+  expect(newest.result).toContain('Status: succeeded, exit 0')
+  expect(newest.result).toContain('(48 earlier lines not shown)\nline 49\nline 50')
+
+  const missing = await $.tool.call({ tool: 'mcp__command-runner__output', id: 'nope' } as never)
+  expect(missing.deny).toContain('No run nope')
+  await ui.unmount()
+})

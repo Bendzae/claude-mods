@@ -10,6 +10,8 @@ import type { CommandRun } from '../types'
 const PANE = 'command-runner'
 const TITLE = 'Commands'
 const RUN_TOOL = 'mcp__command-runner__run'
+const OUTPUT_TOOL = 'mcp__command-runner__output'
+const OUTPUT_LINES = 100
 const KEEP_LINES = 1000
 const KEEP_RUNS = 30
 
@@ -136,6 +138,30 @@ function withOutput(run: CommandRun, text: string): CommandRun {
 }
 
 const outputOf = (run: CommandRun) => (run.partial === '' ? run.lines : [...run.lines, clean(run.partial)])
+
+const plain = (line: string) => line.replace(ESCAPE, '')
+
+/** A run as the model reads it: its status and its last lines, without colour codes. */
+function report(run: CommandRun, wanted: number): string {
+  const output = outputOf(run)
+  const shownLines = output.slice(-wanted).map(plain)
+  const earlier = (run.firstLine ?? 0) + output.length - shownLines.length
+  const status = [
+    run.status,
+    run.exitCode !== undefined ? `exit ${run.exitCode}` : undefined,
+    run.signal,
+  ]
+    .filter(Boolean)
+    .join(', ')
+  return [
+    `Run ${run.id}: $ ${run.command}${run.cwd !== undefined ? ` (in ${run.cwd})` : ''}`,
+    `Status: ${status}`,
+    earlier > 0 ? `(${earlier} earlier lines not shown)` : undefined,
+    shownLines.length === 0 ? '(no output yet)' : shownLines.join('\n'),
+  ]
+    .filter(line => line !== undefined)
+    .join('\n')
+}
 
 const currentRun = (list: CommandRun[], shownId: string) => list.find(run => run.id === shownId) ?? list.at(-1)
 
@@ -328,7 +354,7 @@ export const register: Register = on => {
       description:
         "Starts a shell command in the person's Commands side panel, where its output streams live and they can stop it. " +
         'Use it when the person asks to run something in the panel (their /run-command). ' +
-        'It returns at once, without the output: do not wait for the command, poll it, or run it again another way.',
+        'It returns at once with the run id, without the output: read that with the output tool when you need it; do not run it again another way.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -336,6 +362,20 @@ export const register: Register = on => {
           cwd: { type: 'string', description: "Working directory, absolute or relative to the session's; default the session's" },
         },
         required: ['command'],
+      },
+      isDeferred: true,
+    })
+    await $.tool.register({
+      name: 'output',
+      description:
+        "A command's run in the person's Commands side panel: its status (running, succeeded, failed, stopped), exit code and last output lines. " +
+        'Without an id, the run the panel shows.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The run id the run tool returned' },
+          lines: { type: 'number', description: `How many of the last output lines; default ${OUTPUT_LINES}` },
+        },
       },
       isDeferred: true,
     })
@@ -377,8 +417,19 @@ export const register: Register = on => {
     if (run.status === 'failed') {
       return { deny: `It did not start: ${run.lines.at(-1) ?? 'no reason given'}` }
     }
-    return { result: `Started in the Commands panel: ${command}` }
+    return { result: `Started in the Commands panel as run ${run.id}: ${command}` }
   }).catch(() => ({ deny: 'The command runner could not start it.' }))
+
+  on('tool.call', { tool: OUTPUT_TOOL }, async ($, e) => {
+    const { id, lines } = e as unknown as { id?: unknown; lines?: unknown }
+    const list = await read($, runs)
+    const run = typeof id === 'string' && id !== '' ? list.find(one => one.id === id) : currentRun(list, await read($, shown))
+    if (run === undefined) {
+      return { deny: typeof id === 'string' && id !== '' ? `No run ${id} in the Commands panel.` : 'Nothing run yet.' }
+    }
+    const wanted = typeof lines === 'number' && lines > 0 ? Math.floor(lines) : OUTPUT_LINES
+    return { result: report(run, wanted) }
+  })
 
   // The pane scrolls its output itself, so it can follow the newest lines and
   // hold still while scrolled back.
